@@ -21,12 +21,12 @@ export class GameOverScene extends Phaser.Scene {
 
     this.add.rectangle(0, 0, w, h, 0x05060d, 0.92).setOrigin(0, 0);
 
-    const titleText = this.victory ? "CITY TAGGED" : "BUSTED!";
-    const titleColor = this.victory ? "#00e5ff" : "#ff2bd6";
+    const titleText = this.victory ? "РАЙОН РАЗМЕЧЕН" : "ПОПАЛСЯ!";
+    const titleColor = this.victory ? "#7ec8ff" : "#ff4040";
     const title = this.add
       .text(w / 2, h / 2 - 140, titleText, {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
-        fontSize: "110px",
+        fontSize: this.victory ? "92px" : "110px",
         color: titleColor,
         fontStyle: "bold",
         stroke: "#000000",
@@ -36,24 +36,23 @@ export class GameOverScene extends Phaser.Scene {
     title.setShadow(0, 0, titleColor, 22, true, true);
 
     const sub = this.victory
-      ? "The streets remember your name."
-      : "The cops got you. Try again, writer.";
+      ? "Улицы запомнят твой тег."
+      : "Менты тебя приняли. Беги ещё раз, пацан.";
     this.add
       .text(w / 2, h / 2 - 50, sub, {
         fontFamily: "'Courier New', monospace",
-        fontSize: "26px",
+        fontSize: "24px",
         color: "#e6f1ff",
         fontStyle: "italic",
       })
       .setOrigin(0.5);
 
-    // Stats
     let bonus = 0;
     if (this.victory && !this.spotted) bonus += 1000;
     const score = this.tags * 500 + bonus;
 
     this.add
-      .text(w / 2, h / 2 + 10, `WALLS TAGGED  ${this.tags} / 5`, {
+      .text(w / 2, h / 2 + 10, `СТЕН ЗАКРАШЕНО  ${this.tags} / 5`, {
         fontFamily: "'Courier New', monospace",
         fontSize: "26px",
         color: "#ffd400",
@@ -62,16 +61,21 @@ export class GameOverScene extends Phaser.Scene {
 
     if (this.victory) {
       this.add
-        .text(w / 2, h / 2 + 50, this.spotted ? "Stealth bonus: —" : "Stealth bonus: +1000", {
-          fontFamily: "'Courier New', monospace",
-          fontSize: "22px",
-          color: this.spotted ? "#888" : "#00e5ff",
-        })
+        .text(
+          w / 2,
+          h / 2 + 50,
+          this.spotted ? "Бонус за скрытность: —" : "Бонус за скрытность: +1000",
+          {
+            fontFamily: "'Courier New', monospace",
+            fontSize: "22px",
+            color: this.spotted ? "#888" : "#7ec8ff",
+          },
+        )
         .setOrigin(0.5);
     }
 
     this.add
-      .text(w / 2, h / 2 + 95, `SCORE  ${score.toString().padStart(5, "0")}`, {
+      .text(w / 2, h / 2 + 95, `СЧЁТ  ${score.toString().padStart(5, "0")}`, {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: "34px",
         color: "#ffffff",
@@ -79,7 +83,7 @@ export class GameOverScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     const retry = this.add
-      .text(w / 2, h / 2 + 175, "▶  RUN IT BACK", {
+      .text(w / 2, h / 2 + 175, "▶  ЕЩЁ РАЗ", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: "34px",
         color: "#0a0d1a",
@@ -93,7 +97,7 @@ export class GameOverScene extends Phaser.Scene {
     retry.on("pointerdown", () => this.restart());
 
     const menu = this.add
-      .text(w / 2, h / 2 + 240, "Main Menu", {
+      .text(w / 2, h / 2 + 240, "В главное меню", {
         fontFamily: "'Courier New', monospace",
         fontSize: "20px",
         color: "#e6f1ff",

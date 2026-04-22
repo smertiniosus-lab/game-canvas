@@ -11,12 +11,13 @@ interface GameRegistry {
   maxHeat: number;
   hidden: boolean;
   spraying: boolean;
+  crouching: boolean;
 }
 
 interface WallData {
   sprite: Phaser.GameObjects.Image;
   zone: Phaser.GameObjects.Zone;
-  progress: number; // 0..1
+  progress: number;
   done: boolean;
   letters: Phaser.GameObjects.Text;
 }
@@ -34,17 +35,27 @@ interface CopData {
   facing: 1 | -1;
 }
 
+// Player display sizes
+const PLAYER_W = 60;
+const PLAYER_H = 96;
+const PLAYER_BODY_W = 28;
+const PLAYER_BODY_H = 82;
+const PLAYER_BODY_H_CROUCH = 46;
+
+const COP_W = 60;
+const COP_H = 96;
+const COP_BODY_W = 28;
+const COP_BODY_H = 82;
+
 function buildLevel(): number[][] {
   const grid: number[][] = [];
   for (let y = 0; y < LEVEL_HEIGHT; y++) {
     grid.push(new Array(LEVEL_WIDTH).fill(0));
   }
-  // Sidewalk ground (2 rows thick)
   for (let x = 0; x < LEVEL_WIDTH; x++) {
     grid[LEVEL_HEIGHT - 1][x] = 1;
     grid[LEVEL_HEIGHT - 2][x] = 1;
   }
-  // A few raised ledges (rooftops / awnings) to climb
   const ledges: Array<[number, number, number]> = [
     [10, 9, 3],
     [22, 8, 4],
@@ -85,6 +96,7 @@ export class GameScene extends Phaser.Scene {
   private currentWall?: WallData;
   private spotted = false;
   private gameEnded = false;
+  private crouching = false;
 
   constructor() {
     super("GameScene");
@@ -97,6 +109,8 @@ export class GameScene extends Phaser.Scene {
     this.hidingSpots = [];
     this.cops = [];
     this.currentWall = undefined;
+    this.crouching = false;
+    this.escapeMarker = undefined;
 
     const cam = this.cameras.main;
     const viewW = this.scale.width;
@@ -109,10 +123,11 @@ export class GameScene extends Phaser.Scene {
       maxHeat: 100,
       hidden: false,
       spraying: false,
+      crouching: false,
     };
     this.registry.set("game", reg);
 
-    // Parallax backgrounds — night city
+    // Parallax — provincial Russian night
     this.bgFar = this.add
       .tileSprite(0, 0, viewW, viewH, "bg_far")
       .setOrigin(0, 0)
@@ -125,7 +140,7 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setScrollFactor(0);
     this.bgMid.setTileScale(0.5, 0.5);
-    this.bgMid.setAlpha(0.85);
+    this.bgMid.setAlpha(0.9);
 
     this.bgNear = this.add
       .tileSprite(0, viewH - 200, viewW, 200, "bg_near")
@@ -133,18 +148,17 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0);
     this.bgNear.setTileScale(0.4, 0.4);
 
-    // Dark night overlay tint
+    // Night tint
     this.add
-      .rectangle(0, 0, viewW, viewH, 0x0a0d1a, 0.25)
+      .rectangle(0, 0, viewW, viewH, 0x0a0d1a, 0.3)
       .setOrigin(0, 0)
       .setScrollFactor(0);
 
-    // World bounds
     this.physics.world.setBounds(0, 0, this.worldWidthPx, viewH);
     cam.setBounds(0, 0, this.worldWidthPx, viewH);
     cam.setBackgroundColor("#0a0d1a");
 
-    // Tiles + ground visuals
+    // Tiles
     this.platforms = this.physics.add.staticGroup();
     const grid = buildLevel();
     for (let y = 0; y < grid.length; y++) {
@@ -160,23 +174,23 @@ export class GameScene extends Phaser.Scene {
     }
     this.drawGroundVisuals(grid);
 
-    // Walls to tag — placed along the level
-    const wallPositions = [400, 1200, 2000, 3000, 4400];
+    // Walls to tag
+    const wallPositions = [400, 1200, 2200, 3300, 4400];
     for (const wx of wallPositions) {
       this.spawnWall(wx, (LEVEL_HEIGHT - 2) * TILE);
     }
 
-    // Hiding spots (dumpsters) — distributed
-    const dumpsterPositions = [700, 1500, 2400, 3300, 4000, 5000];
+    // Hiding spots
+    const dumpsterPositions = [700, 1500, 2700, 3700, 4100, 5000];
     for (const dx of dumpsterPositions) {
       this.spawnDumpster(dx, (LEVEL_HEIGHT - 2) * TILE - 38);
     }
 
     // Player
-    const spawnY = (LEVEL_HEIGHT - 3) * TILE;
-    this.player = this.physics.add.sprite(120, spawnY, "hero");
-    this.player.setDisplaySize(72, 96);
-    this.player.body!.setSize(this.player.width * 0.45, this.player.height * 0.85);
+    const groundTopY = (LEVEL_HEIGHT - 2) * TILE;
+    this.player = this.physics.add.sprite(120, groundTopY - 60, "hero");
+    this.player.setDisplaySize(PLAYER_W, PLAYER_H);
+    this.applyPlayerBody(false);
     this.player.setCollideWorldBounds(true);
     this.player.setMaxVelocity(360, 900);
     this.physics.add.collider(this.player, this.platforms);
@@ -192,13 +206,13 @@ export class GameScene extends Phaser.Scene {
     this.keyEsc = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     this.keyEsc.on("down", () => this.togglePause());
 
-    // Cops
-    this.spawnCop("walker", 900, spawnY, 700, 1300);
-    this.spawnCop("light", 1700, spawnY, 1700, 1700);
-    this.spawnCop("walker", 2600, spawnY, 2400, 2900);
-    this.spawnCop("light", 3500, spawnY, 3500, 3500);
-    this.spawnCop("walker", 4100, spawnY, 3900, 4500);
-    this.spawnCop("walker", 5200, spawnY, 5000, 5500);
+    // Cops — distributed evenly, walkers far apart
+    this.spawnCop("walker", 800, groundTopY, 600, 1100);
+    this.spawnCop("light", 1700, groundTopY, 1700, 1700);
+    this.spawnCop("walker", 2700, groundTopY, 2400, 3000);
+    this.spawnCop("light", 3500, groundTopY, 3500, 3500);
+    this.spawnCop("walker", 4300, groundTopY, 4000, 4700);
+    this.spawnCop("walker", 5200, groundTopY, 5000, 5500);
 
     // Cop colliders
     this.cops.forEach((c) => {
@@ -207,6 +221,18 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.showTitleCard();
+  }
+
+  private applyPlayerBody(crouching: boolean) {
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    const bw = PLAYER_BODY_W;
+    const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
+    body.setSize(bw, bh, false);
+    // Center horizontally on the texture, anchor body to bottom of sprite
+    const tw = this.player.width;
+    const th = this.player.height;
+    body.setOffset((tw - bw) / 2, th - bh);
+    this.player.setScale(PLAYER_W / tw, (crouching ? PLAYER_H * 0.65 : PLAYER_H) / th);
   }
 
   private drawGroundVisuals(grid: number[][]) {
@@ -228,10 +254,10 @@ export class GameScene extends Phaser.Scene {
     const w = this.scale.width;
     const h = this.scale.height;
     const card = this.add
-      .text(w / 2, h / 2, "TONIGHT'S MISSION\nTAG 5 WALLS", {
+      .text(w / 2, h / 2, "ЗАДАНИЕ НА НОЧЬ\nЗАКРАСИТЬ 5 СТЕН", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: "54px",
-        color: "#00e5ff",
+        color: "#7ec8ff",
         align: "center",
         backgroundColor: "#0a0d1ad8",
         padding: { x: 40, y: 24 },
@@ -242,7 +268,7 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(100);
     const go = this.add
-      .text(w / 2, h / 2 + 130, "GO!", {
+      .text(w / 2, h / 2 + 130, "ПОЕХАЛИ!", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: "84px",
         color: "#ffd400",
@@ -266,7 +292,7 @@ export class GameScene extends Phaser.Scene {
         go.destroy();
       },
     });
-    this.cameras.main.flash(300, 0, 229, 255);
+    this.cameras.main.flash(300, 126, 200, 255);
   }
 
   private spawnWall(x: number, groundY: number) {
@@ -274,13 +300,11 @@ export class GameScene extends Phaser.Scene {
     const h = 200;
     const cy = groundY - h / 2;
     const sprite = this.add.image(x, cy, "wall_blank").setDisplaySize(w, h);
-    // Highlight frame to show it's a target
     const frame = this.add.graphics();
-    frame.lineStyle(3, 0x00e5ff, 0.85);
+    frame.lineStyle(3, 0x7ec8ff, 0.85);
     frame.strokeRoundedRect(x - w / 2 - 4, cy - h / 2 - 4, w + 8, h + 8, 6);
     frame.setDepth(0);
 
-    // Pulsing glow
     this.tweens.add({
       targets: frame,
       alpha: { from: 0.85, to: 0.3 },
@@ -289,20 +313,18 @@ export class GameScene extends Phaser.Scene {
       repeat: -1,
     });
 
-    // SNAF letters overlay (drawn progressively)
     const letters = this.add
       .text(x, cy, "", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: "60px",
-        color: "#00e5ff",
+        color: "#ffd400",
         stroke: "#000000",
         strokeThickness: 6,
         align: "center",
       })
       .setOrigin(0.5);
-    letters.setShadow(0, 0, "#ff2bd6", 12, true, true);
+    letters.setShadow(0, 0, "#7ec8ff", 12, true, true);
 
-    // Trigger zone (slightly wider than wall, in front of it on the ground)
     const zone = this.add.zone(x, groundY - 40, w + 80, 120);
     this.physics.add.existing(zone, true);
 
@@ -324,17 +346,19 @@ export class GameScene extends Phaser.Scene {
   private spawnCop(
     kind: "walker" | "light",
     x: number,
-    y: number,
+    groundTopY: number,
     patrolMin: number,
     patrolMax: number,
   ) {
-    const sprite = this.physics.add.sprite(x, y, kind === "walker" ? "cop_walker" : "cop_light");
-    sprite.setDisplaySize(72, 96);
-    sprite.body!.setSize(sprite.width * 0.45, sprite.height * 0.85);
+    const sprite = this.physics.add.sprite(x, groundTopY - 60, kind === "walker" ? "cop_walker" : "cop_light");
+    sprite.setDisplaySize(COP_W, COP_H);
+    const body = sprite.body as Phaser.Physics.Arcade.Body;
+    body.setSize(COP_BODY_W, COP_BODY_H, false);
+    body.setOffset((sprite.width - COP_BODY_W) / 2, sprite.height - COP_BODY_H);
     sprite.setCollideWorldBounds(true);
 
     const alertIcon = this.add
-      .text(x, y - 70, "", {
+      .text(x, groundTopY - 130, "", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: "32px",
         color: "#ffd400",
@@ -350,10 +374,13 @@ export class GameScene extends Phaser.Scene {
       cone.setDepth(2);
     }
 
+    // Determine starting direction (walk toward the larger end of patrol range)
+    const center = (patrolMin + patrolMax) / 2;
+    const startDir: 1 | -1 = x < center ? 1 : -1;
+
     if (kind === "walker") {
-      sprite.setVelocityX(-50);
-    } else {
-      sprite.setVelocityX(0);
+      sprite.setVelocityX(startDir * 60);
+      sprite.setFlipX(startDir < 0);
     }
 
     this.cops.push({
@@ -361,8 +388,8 @@ export class GameScene extends Phaser.Scene {
       kind,
       patrolMin,
       patrolMax,
-      dir: -1,
-      facing: -1,
+      dir: startDir,
+      facing: startDir,
       state: "patrol",
       alertTimer: 0,
       alertIcon,
@@ -376,7 +403,7 @@ export class GameScene extends Phaser.Scene {
     const y = (LEVEL_HEIGHT - 3) * TILE;
 
     const arrow = this.add
-      .text(0, -60, "▼ ESCAPE", {
+      .text(0, -60, "▼ ВЫХОД", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: "36px",
         color: "#ffd400",
@@ -384,14 +411,13 @@ export class GameScene extends Phaser.Scene {
         strokeThickness: 6,
       })
       .setOrigin(0.5);
-    arrow.setShadow(0, 0, "#ff2bd6", 12, true, true);
+    arrow.setShadow(0, 0, "#ffa630", 12, true, true);
 
     const portal = this.add.rectangle(0, 0, 80, 160, 0x000000, 0.8).setStrokeStyle(4, 0xffd400);
 
     this.escapeMarker = this.add.container(x, y, [portal, arrow]);
     this.escapeMarker.setDepth(20);
 
-    // Trigger zone
     const zone = this.add.zone(x, y, 80, 160);
     this.physics.add.existing(zone, true);
     this.physics.add.overlap(this.player, zone, () => this.win());
@@ -414,10 +440,10 @@ export class GameScene extends Phaser.Scene {
       const w = this.scale.width;
       const h = this.scale.height;
       this.add
-        .text(w / 2, h / 2, "PAUSED\n(press ESC to resume)", {
+        .text(w / 2, h / 2, "ПАУЗА\n(нажми ESC чтобы продолжить)", {
           fontFamily: "'Courier New', monospace",
           fontSize: "40px",
-          color: "#00e5ff",
+          color: "#7ec8ff",
           align: "center",
           backgroundColor: "#0a0d1ad8",
           padding: { x: 40, y: 24 },
@@ -437,8 +463,8 @@ export class GameScene extends Phaser.Scene {
     this.gameEnded = true;
     const reg = this.registry.get("game") as GameRegistry;
     this.cameras.main.shake(300, 0.015);
-    this.cameras.main.flash(200, 255, 43, 214);
-    this.player.setTint(0xff2bd6);
+    this.cameras.main.flash(200, 255, 100, 50);
+    this.player.setTint(0xff4040);
     this.physics.world.pause();
     this.time.delayedCall(700, () => {
       this.scene.stop("UIScene");
@@ -455,7 +481,7 @@ export class GameScene extends Phaser.Scene {
     const reg = this.registry.get("game") as GameRegistry;
     if (reg.tags < reg.totalTags) return;
     this.gameEnded = true;
-    this.cameras.main.flash(400, 0, 229, 255);
+    this.cameras.main.flash(400, 126, 200, 255);
     this.physics.world.pause();
     this.time.delayedCall(500, () => {
       this.scene.stop("UIScene");
@@ -498,16 +524,13 @@ export class GameScene extends Phaser.Scene {
     if (this.keyX.isDown && wall) {
       this.currentWall = wall;
       reg.spraying = true;
-      // 2 seconds to fully tag
       wall.progress = Math.min(1, wall.progress + delta / 2000);
       const letters = "SNAF";
       const n = Math.floor(wall.progress * letters.length + 0.0001);
       wall.letters.setText(letters.slice(0, n));
 
-      // Heat increases while spraying
       reg.heat = Math.min(reg.maxHeat, reg.heat + delta * 0.012);
 
-      // Spray particles
       if (Math.random() < 0.3) {
         const fx = this.add
           .image(this.player.x + this.facing * 30, this.player.y - 10, "spray_fx")
@@ -539,11 +562,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private updateCops(time: number, delta: number, reg: GameRegistry) {
+  private updateCops(_time: number, delta: number, reg: GameRegistry) {
     const playerHidden = reg.hidden;
-    const sneaking = this.keyShift.isDown;
-    const sightRange = sneaking ? 240 : 380;
-    const chaseRange = sneaking ? 320 : 520;
+    const sneaking = this.keyShift.isDown || this.crouching;
+    const baseSightRange = sneaking ? 220 : 320;
+    const chaseRange = sneaking ? 320 : 480;
 
     for (const cop of this.cops) {
       const s = cop.sprite;
@@ -552,27 +575,25 @@ export class GameScene extends Phaser.Scene {
       const dx = this.player.x - s.x;
       const dy = this.player.y - s.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const sameLevel = Math.abs(dy) < 100;
+      const sameLevel = Math.abs(dy) < 80;
 
-      // Walker patrol
+      // Patrol behavior — walker only
       if (cop.kind === "walker" && cop.state === "patrol") {
-        if (s.x <= cop.patrolMin) {
-          cop.dir = 1;
-        } else if (s.x >= cop.patrolMax) {
-          cop.dir = -1;
-        }
+        if (s.x <= cop.patrolMin) cop.dir = 1;
+        else if (s.x >= cop.patrolMax) cop.dir = -1;
         cop.facing = cop.dir;
         s.setVelocityX(cop.dir * 60);
         s.setFlipX(cop.dir < 0);
       }
 
-      // Vision check
       const facingPlayer =
         (cop.facing === 1 && dx > 0) || (cop.facing === -1 && dx < 0);
-      const canSee =
-        !playerHidden && sameLevel && facingPlayer && dist < sightRange;
 
-      // Light cop draws cone
+      // Walker vision: a forward cone-ish range, only if not hidden
+      const walkerCanSee =
+        !playerHidden && sameLevel && facingPlayer && dist < baseSightRange;
+
+      // Light cop cone
       if (cop.kind === "light" && cop.cone) {
         cop.cone.clear();
         const coneLen = 280;
@@ -593,24 +614,23 @@ export class GameScene extends Phaser.Scene {
         cop.cone.fillPath();
       }
 
-      // For light cop, sight is the cone
       let coneSpot = false;
       if (cop.kind === "light" && !playerHidden) {
         const coneLen = 280;
         const coneHalfAngle = 0.35;
         const baseAngle = cop.facing === 1 ? 0 : Math.PI;
-        const ang = Math.atan2(dy - -20, dx);
+        const ang = Math.atan2(dy + 20, dx);
         const angDiff = Phaser.Math.Angle.Wrap(ang - baseAngle);
         coneSpot = dist < coneLen && Math.abs(angDiff) < coneHalfAngle && sameLevel;
       }
 
-      const spotted = cop.kind === "walker" ? canSee : coneSpot;
+      const spotted = cop.kind === "walker" ? walkerCanSee : coneSpot;
 
       if (spotted) {
         this.spotted = true;
         if (cop.state === "patrol") {
           cop.state = "alert";
-          cop.alertTimer = 1500;
+          cop.alertTimer = 1200;
         }
         reg.heat = Math.min(reg.maxHeat, reg.heat + delta * 0.04);
       }
@@ -619,11 +639,18 @@ export class GameScene extends Phaser.Scene {
         cop.alertIcon.setText("?").setColor("#ffd400");
         cop.alertIcon.x = s.x;
         cop.alertIcon.y = s.y - 70;
+
+        // In alert, walker moves SLOWLY toward last known direction
+        if (cop.kind === "walker") {
+          const dir = (dx > 0 ? 1 : -1) as 1 | -1;
+          cop.facing = dir;
+          s.setVelocityX(dir * 90);
+          s.setFlipX(dir < 0);
+        }
+
         if (spotted) {
           cop.alertTimer -= delta;
-          if (cop.alertTimer <= 0) {
-            cop.state = "chase";
-          }
+          if (cop.alertTimer <= 0) cop.state = "chase";
         } else {
           cop.alertTimer -= delta * 0.5;
           if (cop.alertTimer <= -800) {
@@ -631,25 +658,22 @@ export class GameScene extends Phaser.Scene {
             cop.alertIcon.setText("");
           }
         }
-        if (cop.kind === "walker") s.setVelocityX(0);
       } else if (cop.state === "chase") {
-        cop.alertIcon.setText("!").setColor("#ff2bd6");
+        cop.alertIcon.setText("!").setColor("#ff4040");
         cop.alertIcon.x = s.x;
         cop.alertIcon.y = s.y - 70;
 
         if (cop.kind === "walker") {
-          const speed = 180;
-          const dir = dx > 0 ? 1 : -1;
-          cop.facing = dir as 1 | -1;
+          const speed = 200;
+          const dir = (dx > 0 ? 1 : -1) as 1 | -1;
+          cop.facing = dir;
           s.setVelocityX(dir * speed);
           s.setFlipX(dir < 0);
         } else {
-          // Light cop turns to face but doesn't leave post; fires alert
           cop.facing = (dx > 0 ? 1 : -1) as 1 | -1;
           s.setFlipX(cop.facing < 0);
         }
 
-        // Lose interest if player hidden far enough or out of range
         if ((playerHidden && dist > 200) || dist > chaseRange + 200) {
           cop.state = "patrol";
           cop.alertIcon.setText("");
@@ -660,10 +684,9 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  update(time: number, delta: number) {
+  update(_time: number, delta: number) {
     if (this.isPaused || this.gameEnded) return;
 
-    // Parallax
     const camX = this.cameras.main.scrollX;
     this.bgFar.tilePositionX = camX * 0.1;
     this.bgMid.tilePositionX = camX * 0.4;
@@ -676,11 +699,21 @@ export class GameScene extends Phaser.Scene {
     reg.hidden = hiding;
     this.player.setAlpha(hiding ? 0.45 : 1);
 
-    // Movement (disabled while hiding-still or while spraying actively)
+    // Crouch — DOWN arrow
+    const wantCrouch = !!this.cursors.down?.isDown && !hiding;
+    if (wantCrouch !== this.crouching) {
+      this.crouching = wantCrouch;
+      this.applyPlayerBody(this.crouching);
+    }
+    reg.crouching = this.crouching;
+
+    // Movement
     const left = this.cursors.left?.isDown;
     const right = this.cursors.right?.isDown;
     const sneaking = this.keyShift.isDown;
-    const speed = sneaking ? 130 : 240;
+    let speed = 240;
+    if (sneaking) speed = 130;
+    if (this.crouching) speed = 90;
 
     if (!hiding) {
       if (left) {
@@ -698,29 +731,24 @@ export class GameScene extends Phaser.Scene {
       this.player.setVelocityX(0);
     }
 
-    // Jump
+    // Jump (disabled while crouching or hiding)
     const jumpPressed =
       Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
       Phaser.Input.Keyboard.JustDown(this.keySpace);
     const onGround = this.player.body!.blocked.down;
     if (onGround) this.jumpsLeft = 2;
-    if (jumpPressed && this.jumpsLeft > 0 && !hiding) {
+    if (jumpPressed && this.jumpsLeft > 0 && !hiding && !this.crouching) {
       this.player.setVelocityY(-520);
       this.jumpsLeft--;
     }
 
-    // Tagging
     this.updateTagging(delta, reg);
+    this.updateCops(_time, delta, reg);
 
-    // Cops
-    this.updateCops(time, delta, reg);
-
-    // Heat decay when not actively bad
     if (!reg.spraying && !this.cops.some((c) => c.state !== "patrol")) {
       reg.heat = Math.max(0, reg.heat - delta * 0.008);
     }
 
-    // Fell off world
     if (this.player.y > this.scale.height + 100) {
       this.bust();
       return;
