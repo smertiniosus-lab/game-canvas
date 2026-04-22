@@ -31,7 +31,15 @@ interface WallData {
   progress: number;
   done: boolean;
   letters: Phaser.GameObjects.Text;
+  kind: WallKind;
+  width: number;
+  height: number;
+  x: number;
+  cy: number;
+  marker?: Phaser.GameObjects.Container;
 }
+
+type WallKind = "garage" | "brick" | "concrete" | "kiosk" | "fence";
 
 interface Dumpster {
   x: number;
@@ -70,6 +78,8 @@ const COP_BODY_H = 84;
 // IMPORTANT: hero.png is drawn facing RIGHT but appears mirrored in source — adjust this if needed.
 // false = sprite faces right naturally (no flip when moving right).
 const HERO_FLIP_RIGHT = true; // setFlipX(true) when facing right
+const COP_WALKER_FLIP_RIGHT = true;
+const COP_LIGHT_FLIP_RIGHT = false;
 
 function buildLevel(): number[][] {
   const grid: number[][] = [];
