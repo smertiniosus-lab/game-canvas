@@ -1033,14 +1033,17 @@ export class GameScene extends Phaser.Scene {
   private stopWalkTween() { /* no-op */ }
 
   private squashLand() {
+    if (this.landCooldown > 0) return;
+    this.landCooldown = 250;
     // Brief landing tween — kill any prior to avoid stacking
     this.tweens.killTweensOf(this.player);
-    const sx = this.player.scaleX;
-    const sy = this.player.scaleY;
+    const bx = this.baseScaleX;
+    const by = this.baseScaleY;
+    const cy = this.crouching ? by * 0.9 : by;
     this.tweens.add({
       targets: this.player,
-      scaleY: { from: sy * 0.88, to: sy },
-      scaleX: { from: sx * 1.06, to: sx },
+      scaleY: { from: cy * 0.92, to: cy },
+      scaleX: { from: bx * 1.04, to: bx },
       duration: 110,
       ease: "back.out",
     });
