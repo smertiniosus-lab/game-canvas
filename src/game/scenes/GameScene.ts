@@ -610,14 +610,17 @@ export class GameScene extends Phaser.Scene {
     }
 
     const center = (patrolMin + patrolMax) / 2;
-    const startDir: 1 | -1 = x < center ? 1 : -1;
+    let startDir: 1 | -1 = x < center ? 1 : -1;
 
     if (kind === "walker") {
       sprite.setVelocityX(startDir * 60);
+    } else {
+      // Light cop is stationary — face toward the inside of the level (away from nearest edge)
+      startDir = x < this.worldWidthPx / 2 ? 1 : -1;
     }
 
-    // Cops face same way as hero relative to flip
-    sprite.setFlipX(this.copFlipFor(startDir));
+    // Cops face same way as hero relative to flip (per-kind constants)
+    sprite.setFlipX(this.copFlipFor(startDir, kind));
 
     // Idle/walk bobbing tween (always running, subtle)
     const walkTween = this.tweens.add({
@@ -901,7 +904,7 @@ export class GameScene extends Phaser.Scene {
         else if (s.x >= cop.patrolMax) cop.dir = -1;
         cop.facing = cop.dir;
         s.setVelocityX(cop.dir * 60);
-        s.setFlipX(this.copFlipFor(cop.dir));
+        s.setFlipX(this.copFlipFor(cop.dir, cop.kind));
         // ensure walk tween playing
         if (cop.walkTween && !cop.walkTween.isPlaying()) cop.walkTween.resume();
       }
@@ -965,7 +968,7 @@ export class GameScene extends Phaser.Scene {
           const dir = (dx > 0 ? 1 : -1) as 1 | -1;
           cop.facing = dir;
           s.setVelocityX(dir * 90);
-          s.setFlipX(this.copFlipFor(dir));
+          s.setFlipX(this.copFlipFor(dir, cop.kind));
         }
 
         if (spotted) {
@@ -988,10 +991,10 @@ export class GameScene extends Phaser.Scene {
           const dir = (dx > 0 ? 1 : -1) as 1 | -1;
           cop.facing = dir;
           s.setVelocityX(dir * speed);
-          s.setFlipX(this.copFlipFor(dir));
+          s.setFlipX(this.copFlipFor(dir, cop.kind));
         } else {
           cop.facing = (dx > 0 ? 1 : -1) as 1 | -1;
-          s.setFlipX(this.copFlipFor(cop.facing));
+          s.setFlipX(this.copFlipFor(cop.facing, cop.kind));
         }
 
         if ((playerHidden && dist > 200) || dist > chaseRange + 200) {
