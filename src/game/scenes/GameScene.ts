@@ -1133,12 +1133,12 @@ export class GameScene extends Phaser.Scene {
       this.jumpsLeft--;
       // Brief stretch on takeoff (kill any prior tween to avoid scale stacking)
       this.tweens.killTweensOf(this.player);
-      const sx = this.player.scaleX;
-      const sy = this.player.scaleY;
+      const bx = this.baseScaleX;
+      const by = this.baseScaleY;
       this.tweens.add({
         targets: this.player,
-        scaleY: { from: sy * 1.06, to: sy },
-        scaleX: { from: sx * 0.94, to: sx },
+        scaleY: { from: by * 1.06, to: by },
+        scaleX: { from: bx * 0.94, to: bx },
         duration: 160,
         ease: "sine.out",
       });
