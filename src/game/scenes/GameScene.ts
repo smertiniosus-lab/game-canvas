@@ -306,6 +306,10 @@ export class GameScene extends Phaser.Scene {
 
   // ============ Player body / scale ============
   private applyPlayerBody(crouching: boolean) {
+    // Kill any active scale/angle tweens before recomputing — prevents accumulating distortion
+    if (this.player) {
+      this.tweens.killTweensOf(this.player);
+    }
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const bw = PLAYER_BODY_W;
     const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
@@ -315,6 +319,7 @@ export class GameScene extends Phaser.Scene {
     body.setOffset((tw - bw) / 2, th - bh);
     const visualH = crouching ? PLAYER_H * 0.7 : PLAYER_H;
     this.player.setScale(PLAYER_W / tw, visualH / th);
+    this.player.setAngle(0);
   }
 
   // ============ Ground visuals — single tiled strip ============
