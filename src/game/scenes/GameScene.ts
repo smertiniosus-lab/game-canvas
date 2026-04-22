@@ -148,6 +148,7 @@ export class GameScene extends Phaser.Scene {
   private baseScaleX = 1;
   private baseScaleY = 1;
   private landCooldown = 0;
+  private bodyInitialized = false;
 
   private titleCardObjects: Phaser.GameObjects.GameObject[] = [];
 
@@ -158,6 +159,7 @@ export class GameScene extends Phaser.Scene {
   create() {
     this.gameEnded = false;
     this.spotted = false;
+    this.bodyInitialized = false;
     this.walls = [];
     this.dumpsters = [];
     this.cops = [];
@@ -266,7 +268,7 @@ export class GameScene extends Phaser.Scene {
 
     // ============ Player ============
     const groundTopY = (LEVEL_HEIGHT - 2) * TILE;
-    this.player = this.physics.add.sprite(120, groundTopY - 60, "hero");
+    this.player = this.physics.add.sprite(120, groundTopY - 100, "hero");
     this.player.setDisplaySize(PLAYER_W, PLAYER_H);
     this.player.setDepth(DEPTH_PLAYER);
     this.player.setOrigin(0.5, 0.5);
@@ -317,14 +319,18 @@ export class GameScene extends Phaser.Scene {
     const bw = PLAYER_BODY_W;
     const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
 
-    // Preserve foot position across body resize
-    const oldBottom = body.y + body.height;
+    // Preserve foot position across body resize (skip on first init — body still
+    // matches raw texture size and would yield a huge bogus offset).
+    const oldBottom = this.bodyInitialized ? body.y + body.height : 0;
     body.setSize(bw, bh, false);
     const tw = this.player.width;
     const th = this.player.height;
     body.setOffset((tw - bw) / 2, th - bh);
-    const newBottom = body.y + body.height;
-    this.player.y += oldBottom - newBottom;
+    if (this.bodyInitialized) {
+      const newBottom = body.y + body.height;
+      this.player.y += oldBottom - newBottom;
+    }
+    this.bodyInitialized = true;
 
     // Visual: keep full sprite height. Crouch only slightly compresses head (no floor sinking).
     this.player.setScale(PLAYER_W / tw, PLAYER_H / th);
@@ -1051,6 +1057,8 @@ export class GameScene extends Phaser.Scene {
 
   update(_time: number, delta: number) {
     if (this.isPaused || this.gameEnded) return;
+    // Freeze gameplay while title card is visible
+    if (this.titleCardObjects.length > 0) return;
 
     this.dumpsterCooldown = Math.max(0, this.dumpsterCooldown - delta);
     this.landCooldown = Math.max(0, this.landCooldown - delta);
@@ -1160,7 +1168,7 @@ export class GameScene extends Phaser.Scene {
       reg.heat = Math.max(0, reg.heat - delta * 0.008);
     }
 
-    if (this.player.y > this.scale.height + 100) {
+    if (this.player.y > this.physics.world.bounds.height + 100) {
       this.bust();
       return;
     }
