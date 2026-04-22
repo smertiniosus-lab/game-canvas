@@ -7,6 +7,7 @@ interface GameRegistry {
   maxHeat: number;
   hidden: boolean;
   spraying: boolean;
+  crouching: boolean;
 }
 
 export class UIScene extends Phaser.Scene {
@@ -16,23 +17,23 @@ export class UIScene extends Phaser.Scene {
   private heatLabel!: Phaser.GameObjects.Text;
   private hiddenIcon!: Phaser.GameObjects.Text;
   private sprayIcon!: Phaser.GameObjects.Text;
+  private crouchIcon!: Phaser.GameObjects.Text;
 
   constructor() {
     super("UIScene");
   }
 
   create() {
-    // Top-left: TAGS counter panel
     const panel = this.add.graphics();
     panel.fillStyle(0x0a0d1a, 0.85);
-    panel.lineStyle(3, 0x00e5ff, 1);
+    panel.lineStyle(3, 0x7ec8ff, 1);
     panel.fillRoundedRect(20, 20, 220, 60, 12);
     panel.strokeRoundedRect(20, 20, 220, 60, 12);
 
-    this.add.text(38, 30, "TAGS", {
+    this.add.text(38, 30, "ТЭГИ", {
       fontFamily: "'Courier New', monospace",
       fontSize: "18px",
-      color: "#00e5ff",
+      color: "#7ec8ff",
       fontStyle: "bold",
     });
 
@@ -43,20 +44,19 @@ export class UIScene extends Phaser.Scene {
       fontStyle: "bold",
     });
 
-    // Top-right: HEAT bar
     const w = this.scale.width;
     const heatPanelW = 280;
     const heatX = w - heatPanelW - 20;
     const heatPanel = this.add.graphics();
     heatPanel.fillStyle(0x0a0d1a, 0.85);
-    heatPanel.lineStyle(3, 0xff2bd6, 1);
+    heatPanel.lineStyle(3, 0xffa630, 1);
     heatPanel.fillRoundedRect(heatX, 20, heatPanelW, 60, 12);
     heatPanel.strokeRoundedRect(heatX, 20, heatPanelW, 60, 12);
 
-    this.heatLabel = this.add.text(heatX + 16, 28, "HEAT", {
+    this.heatLabel = this.add.text(heatX + 16, 28, "ШУХЕР", {
       fontFamily: "'Courier New', monospace",
       fontSize: "18px",
-      color: "#ff2bd6",
+      color: "#ffa630",
       fontStyle: "bold",
     });
 
@@ -64,17 +64,16 @@ export class UIScene extends Phaser.Scene {
     this.heatBarBg = this.add
       .rectangle(heatX + 16, 54, barW, 16, 0x222633)
       .setOrigin(0, 0)
-      .setStrokeStyle(2, 0xff2bd6);
+      .setStrokeStyle(2, 0xffa630);
     this.heatBarFill = this.add
-      .rectangle(heatX + 16, 54, 1, 16, 0xff2bd6)
+      .rectangle(heatX + 16, 54, 1, 16, 0xffa630)
       .setOrigin(0, 0);
 
-    // Bottom-center status icons
     this.hiddenIcon = this.add
-      .text(w / 2, this.scale.height - 50, "● HIDDEN", {
+      .text(w / 2, this.scale.height - 50, "● СПРЯТАЛСЯ", {
         fontFamily: "'Courier New', monospace",
         fontSize: "22px",
-        color: "#00e5ff",
+        color: "#7ec8ff",
         backgroundColor: "#0a0d1ad8",
         padding: { x: 14, y: 6 },
         fontStyle: "bold",
@@ -83,12 +82,24 @@ export class UIScene extends Phaser.Scene {
       .setVisible(false);
 
     this.sprayIcon = this.add
-      .text(w / 2, this.scale.height - 100, "✦ SPRAYING ✦", {
+      .text(w / 2, this.scale.height - 100, "✦ КРАСИТ ✦", {
         fontFamily: "'Courier New', monospace",
         fontSize: "22px",
         color: "#ffd400",
         backgroundColor: "#0a0d1ad8",
         padding: { x: 14, y: 6 },
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setVisible(false);
+
+    this.crouchIcon = this.add
+      .text(w / 2 - 180, this.scale.height - 50, "▼ ПРИСЕЛ", {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "20px",
+        color: "#ffa630",
+        backgroundColor: "#0a0d1ad8",
+        padding: { x: 12, y: 5 },
         fontStyle: "bold",
       })
       .setOrigin(0.5)
@@ -110,11 +121,10 @@ export class UIScene extends Phaser.Scene {
     this.tagsText.setText(`${reg.tags} / ${reg.totalTags}`);
 
     const pct = Phaser.Math.Clamp(reg.heat / reg.maxHeat, 0, 1);
-    const fullW = (this.heatBarBg.width as number) - 0;
+    const fullW = this.heatBarBg.width as number;
     this.heatBarFill.width = Math.max(1, fullW * pct);
-    // Color shifts toward red as heat rises
     const c = Phaser.Display.Color.Interpolate.ColorWithColor(
-      Phaser.Display.Color.ValueToColor(0xff2bd6),
+      Phaser.Display.Color.ValueToColor(0xffa630),
       Phaser.Display.Color.ValueToColor(0xff3030),
       100,
       Math.floor(pct * 100),
@@ -123,5 +133,6 @@ export class UIScene extends Phaser.Scene {
 
     this.hiddenIcon.setVisible(reg.hidden);
     this.sprayIcon.setVisible(reg.spraying);
+    this.crouchIcon.setVisible(reg.crouching);
   }
 }

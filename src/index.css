@@ -54,13 +54,13 @@ All colors MUST be HSL.
 
     --sidebar-ring: 217.2 91.2% 59.8%;
 
-    /* SNAF night-city neon frame tokens */
-    --frame-bg: 230 30% 8%;
-    --frame-border: 230 35% 14%;
-    --frame-inner: 230 40% 5%;
-    --neon-cyan: 188 100% 50%;
-    --neon-magenta: 315 100% 58%;
-    --neon-yellow: 50 100% 50%;
+    /* SNAF — Russian provincial night tokens */
+    --frame-bg: 220 18% 8%;
+    --frame-border: 25 25% 16%;
+    --frame-inner: 220 25% 5%;
+    --neon-cyan: 200 80% 65%;
+    --neon-magenta: 25 90% 58%;
+    --neon-yellow: 45 95% 55%;
   }
 
   .dark {
