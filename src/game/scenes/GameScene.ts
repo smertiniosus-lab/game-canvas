@@ -145,6 +145,9 @@ export class GameScene extends Phaser.Scene {
   private playerWalkTween?: Phaser.Tweens.Tween;
   private wasOnGround = true;
   private sprayShakeTween?: Phaser.Tweens.Tween;
+  private baseScaleX = 1;
+  private baseScaleY = 1;
+  private landCooldown = 0;
 
   private titleCardObjects: Phaser.GameObjects.GameObject[] = [];
 
@@ -306,20 +309,33 @@ export class GameScene extends Phaser.Scene {
 
   // ============ Player body / scale ============
   private applyPlayerBody(crouching: boolean) {
-    // Kill any active scale/angle tweens before recomputing — prevents accumulating distortion
+    // Kill only scale/angle tweens before recomputing — preserves position tweens
     if (this.player) {
       this.tweens.killTweensOf(this.player);
     }
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const bw = PLAYER_BODY_W;
     const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
+
+    // Preserve foot position across body resize
+    const oldBottom = body.y + body.height;
     body.setSize(bw, bh, false);
     const tw = this.player.width;
     const th = this.player.height;
     body.setOffset((tw - bw) / 2, th - bh);
-    const visualH = crouching ? PLAYER_H * 0.7 : PLAYER_H;
-    this.player.setScale(PLAYER_W / tw, visualH / th);
-    this.player.setAngle(0);
+    const newBottom = body.y + body.height;
+    this.player.y += oldBottom - newBottom;
+
+    // Visual: keep full sprite height. Crouch only slightly compresses head (no floor sinking).
+    this.player.setScale(PLAYER_W / tw, PLAYER_H / th);
+    this.baseScaleX = this.player.scaleX;
+    this.baseScaleY = this.player.scaleY;
+    if (crouching) {
+      this.player.setScale(this.baseScaleX, this.baseScaleY * 0.9);
+      this.player.setAngle(this.facing > 0 ? 6 : -6);
+    } else {
+      this.player.setAngle(0);
+    }
   }
 
   // ============ Ground visuals — single tiled strip ============
@@ -1017,14 +1033,17 @@ export class GameScene extends Phaser.Scene {
   private stopWalkTween() { /* no-op */ }
 
   private squashLand() {
+    if (this.landCooldown > 0) return;
+    this.landCooldown = 250;
     // Brief landing tween — kill any prior to avoid stacking
     this.tweens.killTweensOf(this.player);
-    const sx = this.player.scaleX;
-    const sy = this.player.scaleY;
+    const bx = this.baseScaleX;
+    const by = this.baseScaleY;
+    const cy = this.crouching ? by * 0.9 : by;
     this.tweens.add({
       targets: this.player,
-      scaleY: { from: sy * 0.88, to: sy },
-      scaleX: { from: sx * 1.06, to: sx },
+      scaleY: { from: cy * 0.92, to: cy },
+      scaleX: { from: bx * 1.04, to: bx },
       duration: 110,
       ease: "back.out",
     });
@@ -1034,6 +1053,7 @@ export class GameScene extends Phaser.Scene {
     if (this.isPaused || this.gameEnded) return;
 
     this.dumpsterCooldown = Math.max(0, this.dumpsterCooldown - delta);
+    this.landCooldown = Math.max(0, this.landCooldown - delta);
 
     const camX = this.cameras.main.scrollX;
     this.bgFar.tilePositionX = camX * 0.1;
@@ -1113,12 +1133,12 @@ export class GameScene extends Phaser.Scene {
       this.jumpsLeft--;
       // Brief stretch on takeoff (kill any prior tween to avoid scale stacking)
       this.tweens.killTweensOf(this.player);
-      const sx = this.player.scaleX;
-      const sy = this.player.scaleY;
+      const bx = this.baseScaleX;
+      const by = this.baseScaleY;
       this.tweens.add({
         targets: this.player,
-        scaleY: { from: sy * 1.06, to: sy },
-        scaleX: { from: sx * 0.94, to: sx },
+        scaleY: { from: by * 1.06, to: by },
+        scaleX: { from: bx * 0.94, to: bx },
         duration: 160,
         ease: "sine.out",
       });
