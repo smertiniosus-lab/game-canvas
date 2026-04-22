@@ -311,7 +311,7 @@ export class GameScene extends Phaser.Scene {
   private applyPlayerBody(crouching: boolean) {
     // Kill only scale/angle tweens before recomputing — preserves position tweens
     if (this.player) {
-      this.tweens.killTweensOf(this.player, ["scaleX", "scaleY", "angle"]);
+      this.tweens.killTweensOf(this.player);
     }
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const bw = PLAYER_BODY_W;
