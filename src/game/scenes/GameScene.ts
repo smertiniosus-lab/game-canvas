@@ -1053,6 +1053,7 @@ export class GameScene extends Phaser.Scene {
     if (this.isPaused || this.gameEnded) return;
 
     this.dumpsterCooldown = Math.max(0, this.dumpsterCooldown - delta);
+    this.landCooldown = Math.max(0, this.landCooldown - delta);
 
     const camX = this.cameras.main.scrollX;
     this.bgFar.tilePositionX = camX * 0.1;
