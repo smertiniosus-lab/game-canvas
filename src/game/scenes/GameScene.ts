@@ -145,6 +145,9 @@ export class GameScene extends Phaser.Scene {
   private playerWalkTween?: Phaser.Tweens.Tween;
   private wasOnGround = true;
   private sprayShakeTween?: Phaser.Tweens.Tween;
+  private baseScaleX = 1;
+  private baseScaleY = 1;
+  private landCooldown = 0;
 
   private titleCardObjects: Phaser.GameObjects.GameObject[] = [];
 
