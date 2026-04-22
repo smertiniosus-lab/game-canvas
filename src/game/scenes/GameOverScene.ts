@@ -2,55 +2,88 @@ import Phaser from "phaser";
 
 export class GameOverScene extends Phaser.Scene {
   private victory = false;
-  private score = 0;
+  private tags = 0;
+  private spotted = false;
 
   constructor() {
     super("GameOverScene");
   }
 
-  init(data: { victory: boolean; score: number }) {
+  init(data: { victory: boolean; tags: number; spotted: boolean }) {
     this.victory = !!data?.victory;
-    this.score = data?.score ?? 0;
+    this.tags = data?.tags ?? 0;
+    this.spotted = !!data?.spotted;
   }
 
   create() {
     const w = this.scale.width;
     const h = this.scale.height;
 
-    this.add.rectangle(0, 0, w, h, 0x3a2a1a, 0.85).setOrigin(0, 0);
+    this.add.rectangle(0, 0, w, h, 0x05060d, 0.92).setOrigin(0, 0);
 
-    this.add
-      .text(w / 2, h / 2 - 120, this.victory ? "A KNOCKOUT!" : "GAME OVER", {
-        fontFamily: "Georgia, serif",
-        fontSize: "84px",
-        color: this.victory ? "#f3d36b" : "#c44b3a",
+    const titleText = this.victory ? "CITY TAGGED" : "BUSTED!";
+    const titleColor = this.victory ? "#00e5ff" : "#ff2bd6";
+    const title = this.add
+      .text(w / 2, h / 2 - 140, titleText, {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "110px",
+        color: titleColor,
         fontStyle: "bold",
+        stroke: "#000000",
+        strokeThickness: 10,
       })
       .setOrigin(0.5);
+    title.setShadow(0, 0, titleColor, 22, true, true);
 
+    const sub = this.victory
+      ? "The streets remember your name."
+      : "The cops got you. Try again, writer.";
     this.add
-      .text(w / 2, h / 2 - 30, this.victory ? "You beat Old Man Oak!" : "Better luck next time...", {
-        fontFamily: "Georgia, serif",
-        fontSize: "30px",
-        color: "#fff3d4",
+      .text(w / 2, h / 2 - 50, sub, {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "26px",
+        color: "#e6f1ff",
         fontStyle: "italic",
       })
       .setOrigin(0.5);
 
+    // Stats
+    let bonus = 0;
+    if (this.victory && !this.spotted) bonus += 1000;
+    const score = this.tags * 500 + bonus;
+
     this.add
-      .text(w / 2, h / 2 + 30, `FINAL SCORE  ${this.score.toString().padStart(5, "0")}`, {
-        fontFamily: "Georgia, serif",
-        fontSize: "36px",
-        color: "#fff3d4",
+      .text(w / 2, h / 2 + 10, `WALLS TAGGED  ${this.tags} / 5`, {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "26px",
+        color: "#ffd400",
+      })
+      .setOrigin(0.5);
+
+    if (this.victory) {
+      this.add
+        .text(w / 2, h / 2 + 50, this.spotted ? "Stealth bonus: —" : "Stealth bonus: +1000", {
+          fontFamily: "'Courier New', monospace",
+          fontSize: "22px",
+          color: this.spotted ? "#888" : "#00e5ff",
+        })
+        .setOrigin(0.5);
+    }
+
+    this.add
+      .text(w / 2, h / 2 + 95, `SCORE  ${score.toString().padStart(5, "0")}`, {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "34px",
+        color: "#ffffff",
       })
       .setOrigin(0.5);
 
     const retry = this.add
-      .text(w / 2, h / 2 + 130, "▶  PLAY AGAIN", {
-        fontFamily: "Georgia, serif",
-        fontSize: "36px",
-        color: "#fff3d4",
-        backgroundColor: "#c44b3a",
+      .text(w / 2, h / 2 + 175, "▶  RUN IT BACK", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "34px",
+        color: "#0a0d1a",
+        backgroundColor: "#ffd400",
         padding: { x: 28, y: 12 },
       })
       .setOrigin(0.5)
@@ -60,10 +93,10 @@ export class GameOverScene extends Phaser.Scene {
     retry.on("pointerdown", () => this.restart());
 
     const menu = this.add
-      .text(w / 2, h / 2 + 200, "Main Menu", {
-        fontFamily: "Georgia, serif",
-        fontSize: "22px",
-        color: "#fff3d4",
+      .text(w / 2, h / 2 + 240, "Main Menu", {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "20px",
+        color: "#e6f1ff",
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });

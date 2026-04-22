@@ -8,55 +8,66 @@ export class MenuScene extends Phaser.Scene {
   create() {
     const { width, height } = this.scale;
 
-    // Background
+    // Night sky background
     const bg = this.add.image(width / 2, height / 2, "bg_far");
     const scale = Math.max(width / bg.width, height / bg.height);
     bg.setScale(scale);
 
-    // Cartoon trees mid layer
-    const mid = this.add.image(width / 2, height - 200, "bg_mid").setOrigin(0.5, 1);
-    mid.setScale(Math.min(width / mid.width, 0.6));
+    // City silhouette mid layer
+    const mid = this.add.image(width / 2, height - 40, "bg_mid").setOrigin(0.5, 1);
+    mid.setScale(Math.min(width / mid.width, 0.7));
+    mid.setAlpha(0.85);
 
-    // Title card panel
+    // Title card panel — dark with neon outline
+    const panelW = 720;
+    const panelH = 240;
+    const panelX = width / 2 - panelW / 2;
+    const panelY = 70;
     const panel = this.add.graphics();
-    panel.fillStyle(0xfff3d4, 1);
-    panel.lineStyle(6, 0x3a2a1a, 1);
-    panel.fillRoundedRect(width / 2 - 320, 80, 640, 220, 24);
-    panel.strokeRoundedRect(width / 2 - 320, 80, 640, 220, 24);
+    panel.fillStyle(0x0a0d1a, 0.9);
+    panel.lineStyle(5, 0x00e5ff, 1);
+    panel.fillRoundedRect(panelX, panelY, panelW, panelH, 18);
+    panel.strokeRoundedRect(panelX, panelY, panelW, panelH, 18);
+
+    // Big SNAF graffiti title
+    const title = this.add
+      .text(width / 2, panelY + 90, "SNAF", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "120px",
+        color: "#00e5ff",
+        fontStyle: "bold",
+        stroke: "#000000",
+        strokeThickness: 10,
+      })
+      .setOrigin(0.5);
+    // Magenta glow shadow
+    title.setShadow(0, 0, "#ff2bd6", 18, true, true);
 
     this.add
-      .text(width / 2, 130, "FOREST FRENZY", {
-        fontFamily: "Georgia, serif",
-        fontSize: "56px",
-        color: "#c44b3a",
+      .text(width / 2, panelY + 175, "A NIGHT IN THE CITY", {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "26px",
+        color: "#ffd400",
         fontStyle: "bold",
       })
       .setOrigin(0.5);
 
     this.add
-      .text(width / 2, 200, "A Run & Gun Adventure", {
-        fontFamily: "Georgia, serif",
-        fontSize: "24px",
-        color: "#3a2a1a",
+      .text(width / 2, panelY + 215, "Tag 5 walls. Don't get busted.", {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "18px",
+        color: "#e6f1ff",
         fontStyle: "italic",
-      })
-      .setOrigin(0.5);
-
-    this.add
-      .text(width / 2, 250, "Round 1", {
-        fontFamily: "Georgia, serif",
-        fontSize: "28px",
-        color: "#2a8b8b",
       })
       .setOrigin(0.5);
 
     // Play button
     const playBtn = this.add
-      .text(width / 2, height - 220, "▶  PLAY", {
-        fontFamily: "Georgia, serif",
+      .text(width / 2, height - 240, "▶  HIT THE STREETS", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: "44px",
-        color: "#fff3d4",
-        backgroundColor: "#c44b3a",
+        color: "#0a0d1a",
+        backgroundColor: "#ffd400",
         padding: { x: 36, y: 14 },
       })
       .setOrigin(0.5)
@@ -70,28 +81,39 @@ export class MenuScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        height - 110,
-        "← →  move    SPACE / ↑  jump (double)    X  shoot    Z  dash    ESC  pause",
+        height - 130,
+        "← →  walk    SHIFT  sneak    SPACE / ↑  jump (double)\nX  spray (hold near wall)    Z  hide    ESC  pause",
         {
-          fontFamily: "Georgia, serif",
+          fontFamily: "'Courier New', monospace",
           fontSize: "18px",
-          color: "#3a2a1a",
+          color: "#e6f1ff",
           align: "center",
+          lineSpacing: 6,
         },
       )
       .setOrigin(0.5);
 
     this.add
-      .text(width / 2, height - 70, "Press SPACE or ENTER to start", {
-        fontFamily: "Georgia, serif",
+      .text(width / 2, height - 50, "Press SPACE or ENTER to start", {
+        fontFamily: "'Courier New', monospace",
         fontSize: "20px",
-        color: "#3a2a1a",
+        color: "#ff2bd6",
         fontStyle: "italic",
       })
       .setOrigin(0.5);
 
     this.input.keyboard?.on("keydown-SPACE", () => this.startGame());
     this.input.keyboard?.on("keydown-ENTER", () => this.startGame());
+
+    // Subtle neon flicker on title
+    this.tweens.add({
+      targets: title,
+      alpha: { from: 1, to: 0.85 },
+      duration: 1200,
+      yoyo: true,
+      repeat: -1,
+      ease: "sine.inOut",
+    });
   }
 
   private startGame() {

@@ -1,52 +1,99 @@
 import Phaser from "phaser";
 
 interface GameRegistry {
-  hp: number;
-  maxHp: number;
-  score: number;
-  bossHp: number;
-  bossMaxHp: number;
-  bossActive: boolean;
+  tags: number;
+  totalTags: number;
+  heat: number;
+  maxHeat: number;
+  hidden: boolean;
+  spraying: boolean;
 }
 
 export class UIScene extends Phaser.Scene {
-  private hearts: Phaser.GameObjects.Text[] = [];
-  private scoreText!: Phaser.GameObjects.Text;
-  private bossBarBg?: Phaser.GameObjects.Rectangle;
-  private bossBarFill?: Phaser.GameObjects.Rectangle;
-  private bossLabel?: Phaser.GameObjects.Text;
+  private tagsText!: Phaser.GameObjects.Text;
+  private heatBarBg!: Phaser.GameObjects.Rectangle;
+  private heatBarFill!: Phaser.GameObjects.Rectangle;
+  private heatLabel!: Phaser.GameObjects.Text;
+  private hiddenIcon!: Phaser.GameObjects.Text;
+  private sprayIcon!: Phaser.GameObjects.Text;
 
   constructor() {
     super("UIScene");
   }
 
   create() {
-    const w = this.scale.width;
-
-    // Top panel
+    // Top-left: TAGS counter panel
     const panel = this.add.graphics();
-    panel.fillStyle(0x3a2a1a, 0.85);
-    panel.fillRoundedRect(20, 20, 320, 56, 14);
-    panel.lineStyle(3, 0xfff3d4, 1);
-    panel.strokeRoundedRect(20, 20, 320, 56, 14);
+    panel.fillStyle(0x0a0d1a, 0.85);
+    panel.lineStyle(3, 0x00e5ff, 1);
+    panel.fillRoundedRect(20, 20, 220, 60, 12);
+    panel.strokeRoundedRect(20, 20, 220, 60, 12);
 
-    for (let i = 0; i < 3; i++) {
-      const h = this.add.text(40 + i * 38, 30, "♥", {
-        fontFamily: "Georgia, serif",
-        fontSize: "36px",
-        color: "#e74c3c",
-      });
-      this.hearts.push(h);
-    }
-
-    this.scoreText = this.add.text(170, 36, "SCORE  0", {
-      fontFamily: "Georgia, serif",
-      fontSize: "22px",
-      color: "#fff3d4",
+    this.add.text(38, 30, "TAGS", {
+      fontFamily: "'Courier New', monospace",
+      fontSize: "18px",
+      color: "#00e5ff",
       fontStyle: "bold",
     });
 
-    // Listen for updates
+    this.tagsText = this.add.text(38, 48, "0 / 5", {
+      fontFamily: "'Impact', 'Arial Black', sans-serif",
+      fontSize: "26px",
+      color: "#ffd400",
+      fontStyle: "bold",
+    });
+
+    // Top-right: HEAT bar
+    const w = this.scale.width;
+    const heatPanelW = 280;
+    const heatX = w - heatPanelW - 20;
+    const heatPanel = this.add.graphics();
+    heatPanel.fillStyle(0x0a0d1a, 0.85);
+    heatPanel.lineStyle(3, 0xff2bd6, 1);
+    heatPanel.fillRoundedRect(heatX, 20, heatPanelW, 60, 12);
+    heatPanel.strokeRoundedRect(heatX, 20, heatPanelW, 60, 12);
+
+    this.heatLabel = this.add.text(heatX + 16, 28, "HEAT", {
+      fontFamily: "'Courier New', monospace",
+      fontSize: "18px",
+      color: "#ff2bd6",
+      fontStyle: "bold",
+    });
+
+    const barW = heatPanelW - 32;
+    this.heatBarBg = this.add
+      .rectangle(heatX + 16, 54, barW, 16, 0x222633)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, 0xff2bd6);
+    this.heatBarFill = this.add
+      .rectangle(heatX + 16, 54, 1, 16, 0xff2bd6)
+      .setOrigin(0, 0);
+
+    // Bottom-center status icons
+    this.hiddenIcon = this.add
+      .text(w / 2, this.scale.height - 50, "● HIDDEN", {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "22px",
+        color: "#00e5ff",
+        backgroundColor: "#0a0d1ad8",
+        padding: { x: 14, y: 6 },
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setVisible(false);
+
+    this.sprayIcon = this.add
+      .text(w / 2, this.scale.height - 100, "✦ SPRAYING ✦", {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "22px",
+        color: "#ffd400",
+        backgroundColor: "#0a0d1ad8",
+        padding: { x: 14, y: 6 },
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setVisible(false);
+
     const gameScene = this.scene.get("GameScene");
     gameScene.events.on("hudUpdate", () => this.refresh());
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -60,34 +107,21 @@ export class UIScene extends Phaser.Scene {
     const reg = this.registry.get("game") as GameRegistry | undefined;
     if (!reg) return;
 
-    this.hearts.forEach((h, i) => {
-      h.setText(i < reg.hp ? "♥" : "♡");
-      h.setColor(i < reg.hp ? "#e74c3c" : "#7a5a3a");
-    });
+    this.tagsText.setText(`${reg.tags} / ${reg.totalTags}`);
 
-    this.scoreText.setText(`SCORE  ${reg.score.toString().padStart(5, "0")}`);
+    const pct = Phaser.Math.Clamp(reg.heat / reg.maxHeat, 0, 1);
+    const fullW = (this.heatBarBg.width as number) - 0;
+    this.heatBarFill.width = Math.max(1, fullW * pct);
+    // Color shifts toward red as heat rises
+    const c = Phaser.Display.Color.Interpolate.ColorWithColor(
+      Phaser.Display.Color.ValueToColor(0xff2bd6),
+      Phaser.Display.Color.ValueToColor(0xff3030),
+      100,
+      Math.floor(pct * 100),
+    );
+    this.heatBarFill.fillColor = Phaser.Display.Color.GetColor(c.r, c.g, c.b);
 
-    if (reg.bossActive) {
-      const w = this.scale.width;
-      const barW = 600;
-      if (!this.bossBarBg) {
-        this.bossBarBg = this.add
-          .rectangle(w / 2, 50, barW + 8, 28, 0x3a2a1a)
-          .setStrokeStyle(3, 0xfff3d4);
-        this.bossBarFill = this.add
-          .rectangle(w / 2 - barW / 2, 50, barW, 22, 0xc44b3a)
-          .setOrigin(0, 0.5);
-        this.bossLabel = this.add
-          .text(w / 2, 22, "OLD MAN OAK", {
-            fontFamily: "Georgia, serif",
-            fontSize: "18px",
-            color: "#fff3d4",
-            fontStyle: "bold",
-          })
-          .setOrigin(0.5);
-      }
-      const pct = reg.bossHp / reg.bossMaxHp;
-      this.bossBarFill!.width = barW * pct;
-    }
+    this.hiddenIcon.setVisible(reg.hidden);
+    this.sprayIcon.setVisible(reg.spraying);
   }
 }
