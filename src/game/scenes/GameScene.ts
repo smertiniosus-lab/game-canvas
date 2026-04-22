@@ -84,21 +84,23 @@ const COP_LIGHT_FLIP_RIGHT = false;
 function buildLevel(): number[][] {
   const grid: number[][] = [];
   for (let y = 0; y < LEVEL_HEIGHT; y++) {
-    grid.push(new Array(LEVEL_WIDTH).fill(0));
+    grid.push(Array.from({ length: LEVEL_WIDTH }, () => 0));
   }
   // Solid ground
   for (let x = 0; x < LEVEL_WIDTH; x++) {
     grid[LEVEL_HEIGHT - 1][x] = 1;
     grid[LEVEL_HEIGHT - 2][x] = 1;
   }
-  // Long, connected ledges (balconies / canopies) — min length 4
+  // Long, connected ledges (balconies / canopies) — placed in GAPS BETWEEN wall groups
+  // Wall groups (px): G1≈400-640, G2≈1300-1780, G3≈2500-2740, G4≈3500-3980, G5≈4700
+  // Tiles 64px wide; place ledges between groups so pillars don't overlap walls.
+  // Tile X-ranges to AVOID (in tile units): G1: 5-11, G2: 19-29, G3: 38-44, G4: 53-63, G5: 72-76
   const ledges: Array<[number, number, number]> = [
-    [8, 9, 5],
-    [20, 8, 5],
-    [34, 9, 5],
-    [48, 8, 5],
-    [62, 9, 5],
-    [76, 8, 5],
+    [13, 8, 4],   // gap between G1 and G2
+    [32, 8, 4],   // gap between G2 and G3
+    [47, 7, 4],   // gap between G3 and G4
+    [66, 8, 4],   // gap between G4 and G5
+    [80, 7, 4],   // after G5
   ];
   for (const [x, y, len] of ledges) {
     for (let i = 0; i < len; i++) grid[y][x + i] = 2;
