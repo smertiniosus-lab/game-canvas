@@ -53,6 +53,11 @@ All colors MUST be HSL.
     --sidebar-border: 220 13% 91%;
 
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* Cuphead-style cartoon frame tokens */
+    --frame-bg: 38 60% 88%;
+    --frame-border: 26 45% 16%;
+    --frame-inner: 38 70% 94%;
   }
 
   .dark {
