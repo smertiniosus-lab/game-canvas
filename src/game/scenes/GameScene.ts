@@ -4,6 +4,17 @@ const TILE = 64;
 const LEVEL_WIDTH = 90; // tiles
 const LEVEL_HEIGHT = 14;
 
+// Depth layers
+const DEPTH_BG = 0;
+const DEPTH_GROUND = 1;
+const DEPTH_WALL = 2;
+const DEPTH_DUMPSTER_BACK = 8;
+const DEPTH_COP = 12;
+const DEPTH_LIGHT_CONE = 13;
+const DEPTH_PLAYER = 15;
+const DEPTH_DUMPSTER_FRONT = 16;
+const DEPTH_HUD = 50;
+
 interface GameRegistry {
   tags: number;
   totalTags: number;
@@ -22,6 +33,14 @@ interface WallData {
   letters: Phaser.GameObjects.Text;
 }
 
+interface Dumpster {
+  x: number;
+  y: number;
+  back: Phaser.GameObjects.Image;
+  front: Phaser.GameObjects.Image;
+  prompt: Phaser.GameObjects.Text;
+}
+
 interface CopData {
   sprite: Phaser.Physics.Arcade.Sprite;
   kind: "walker" | "light";
@@ -33,36 +52,43 @@ interface CopData {
   alertIcon: Phaser.GameObjects.Text;
   cone?: Phaser.GameObjects.Graphics;
   facing: 1 | -1;
+  walkTween?: Phaser.Tweens.Tween;
 }
 
 // Player display sizes
-const PLAYER_W = 60;
-const PLAYER_H = 96;
+const PLAYER_W = 64;
+const PLAYER_H = 100;
 const PLAYER_BODY_W = 28;
-const PLAYER_BODY_H = 82;
-const PLAYER_BODY_H_CROUCH = 46;
+const PLAYER_BODY_H = 84;
+const PLAYER_BODY_H_CROUCH = 48;
 
-const COP_W = 60;
-const COP_H = 96;
+const COP_W = 64;
+const COP_H = 100;
 const COP_BODY_W = 28;
-const COP_BODY_H = 82;
+const COP_BODY_H = 84;
+
+// IMPORTANT: hero.png is drawn facing RIGHT but appears mirrored in source — adjust this if needed.
+// false = sprite faces right naturally (no flip when moving right).
+const HERO_FLIP_RIGHT = true; // setFlipX(true) when facing right
 
 function buildLevel(): number[][] {
   const grid: number[][] = [];
   for (let y = 0; y < LEVEL_HEIGHT; y++) {
     grid.push(new Array(LEVEL_WIDTH).fill(0));
   }
+  // Solid ground
   for (let x = 0; x < LEVEL_WIDTH; x++) {
     grid[LEVEL_HEIGHT - 1][x] = 1;
     grid[LEVEL_HEIGHT - 2][x] = 1;
   }
+  // Long, connected ledges (balconies / canopies) — min length 4
   const ledges: Array<[number, number, number]> = [
-    [10, 9, 3],
-    [22, 8, 4],
-    [38, 9, 3],
-    [52, 8, 4],
-    [68, 9, 3],
-    [78, 8, 3],
+    [8, 9, 5],
+    [20, 8, 5],
+    [34, 9, 5],
+    [48, 8, 5],
+    [62, 9, 5],
+    [76, 8, 5],
   ];
   for (const [x, y, len] of ledges) {
     for (let i = 0; i < len; i++) grid[y][x + i] = 2;
@@ -81,7 +107,7 @@ export class GameScene extends Phaser.Scene {
 
   private platforms!: Phaser.Physics.Arcade.StaticGroup;
   private walls: WallData[] = [];
-  private hidingSpots: Phaser.GameObjects.Image[] = [];
+  private dumpsters: Dumpster[] = [];
   private cops: CopData[] = [];
   private escapeMarker?: Phaser.GameObjects.Container;
 
@@ -98,6 +124,18 @@ export class GameScene extends Phaser.Scene {
   private gameEnded = false;
   private crouching = false;
 
+  // Hide / dumpster
+  private hidingInDumpster = false;
+  private nearDumpster?: Dumpster;
+  private dumpsterCooldown = 0;
+
+  // Animation state
+  private playerWalkTween?: Phaser.Tweens.Tween;
+  private wasOnGround = true;
+  private sprayShakeTween?: Phaser.Tweens.Tween;
+
+  private titleCardObjects: Phaser.GameObjects.GameObject[] = [];
+
   constructor() {
     super("GameScene");
   }
@@ -106,11 +144,13 @@ export class GameScene extends Phaser.Scene {
     this.gameEnded = false;
     this.spotted = false;
     this.walls = [];
-    this.hidingSpots = [];
+    this.dumpsters = [];
     this.cops = [];
     this.currentWall = undefined;
     this.crouching = false;
+    this.hidingInDumpster = false;
     this.escapeMarker = undefined;
+    this.titleCardObjects = [];
 
     const cam = this.cameras.main;
     const viewW = this.scale.width;
@@ -127,38 +167,47 @@ export class GameScene extends Phaser.Scene {
     };
     this.registry.set("game", reg);
 
-    // Parallax — provincial Russian night
+    // ============ Parallax — fixed scaling ============
     this.bgFar = this.add
       .tileSprite(0, 0, viewW, viewH, "bg_far")
       .setOrigin(0, 0)
-      .setScrollFactor(0);
+      .setScrollFactor(0)
+      .setDepth(DEPTH_BG);
     const farTex = this.textures.get("bg_far").getSourceImage() as HTMLImageElement;
-    this.bgFar.setTileScale(viewH / farTex.height, viewH / farTex.height);
+    const farScale = viewH / farTex.height;
+    this.bgFar.setTileScale(farScale, farScale);
 
     this.bgMid = this.add
       .tileSprite(0, viewH - 380, viewW, 380, "bg_mid")
       .setOrigin(0, 0)
-      .setScrollFactor(0);
-    this.bgMid.setTileScale(0.5, 0.5);
-    this.bgMid.setAlpha(0.9);
+      .setScrollFactor(0)
+      .setDepth(DEPTH_BG);
+    const midTex = this.textures.get("bg_mid").getSourceImage() as HTMLImageElement;
+    const midScale = 380 / midTex.height;
+    this.bgMid.setTileScale(midScale, midScale);
+    this.bgMid.setAlpha(0.92);
 
     this.bgNear = this.add
-      .tileSprite(0, viewH - 200, viewW, 200, "bg_near")
+      .tileSprite(0, viewH - 220, viewW, 220, "bg_near")
       .setOrigin(0, 0)
-      .setScrollFactor(0);
-    this.bgNear.setTileScale(0.4, 0.4);
+      .setScrollFactor(0)
+      .setDepth(DEPTH_BG);
+    const nearTex = this.textures.get("bg_near").getSourceImage() as HTMLImageElement;
+    const nearScale = 220 / nearTex.height;
+    this.bgNear.setTileScale(nearScale, nearScale);
 
     // Night tint
     this.add
       .rectangle(0, 0, viewW, viewH, 0x0a0d1a, 0.3)
       .setOrigin(0, 0)
-      .setScrollFactor(0);
+      .setScrollFactor(0)
+      .setDepth(DEPTH_BG);
 
     this.physics.world.setBounds(0, 0, this.worldWidthPx, viewH);
     cam.setBounds(0, 0, this.worldWidthPx, viewH);
     cam.setBackgroundColor("#0a0d1a");
 
-    // Tiles
+    // ============ Tiles (physics, invisible) ============
     this.platforms = this.physics.add.staticGroup();
     const grid = buildLevel();
     for (let y = 0; y < grid.length; y++) {
@@ -174,26 +223,44 @@ export class GameScene extends Phaser.Scene {
     }
     this.drawGroundVisuals(grid);
 
-    // Walls to tag
-    const wallPositions = [400, 1200, 2200, 3300, 4400];
-    for (const wx of wallPositions) {
-      this.spawnWall(wx, (LEVEL_HEIGHT - 2) * TILE);
+    // ============ Walls (garage doors), grouped as cooperatives ============
+    // Groups of 2-3 doors with small gaps, then a longer gap before next group.
+    const wallGroups = [
+      [400, 580], // 2 doors
+      [1300, 1480, 1660], // 3 doors
+      [2500, 2680], // 2 doors
+      [3500, 3680, 3860], // 3 doors
+      [4700], // 1 door
+    ];
+    let pickedCount = 0;
+    const targetTags = 5;
+    // Spawn ALL doors visually but only mark some as "taggable" — actually mark first 5 across groups
+    for (const group of wallGroups) {
+      for (const wx of group) {
+        const taggable = pickedCount < targetTags;
+        this.spawnWall(wx, (LEVEL_HEIGHT - 2) * TILE, taggable);
+        if (taggable) pickedCount++;
+      }
     }
 
-    // Hiding spots
-    const dumpsterPositions = [700, 1500, 2700, 3700, 4100, 5000];
+    // ============ Dumpsters ============
+    const dumpsterPositions = [800, 1900, 2900, 3300, 4100, 5000];
     for (const dx of dumpsterPositions) {
-      this.spawnDumpster(dx, (LEVEL_HEIGHT - 2) * TILE - 38);
+      this.spawnDumpster(dx, (LEVEL_HEIGHT - 2) * TILE);
     }
 
-    // Player
+    // ============ Player ============
     const groundTopY = (LEVEL_HEIGHT - 2) * TILE;
     this.player = this.physics.add.sprite(120, groundTopY - 60, "hero");
     this.player.setDisplaySize(PLAYER_W, PLAYER_H);
+    this.player.setDepth(DEPTH_PLAYER);
+    this.player.setOrigin(0.5, 0.5);
     this.applyPlayerBody(false);
     this.player.setCollideWorldBounds(true);
     this.player.setMaxVelocity(360, 900);
     this.physics.add.collider(this.player, this.platforms);
+    // Default facing: right
+    this.player.setFlipX(HERO_FLIP_RIGHT);
 
     cam.startFollow(this.player, true, 0.12, 0.12, 0, 60);
 
@@ -205,8 +272,9 @@ export class GameScene extends Phaser.Scene {
     this.keyShift = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
     this.keyEsc = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     this.keyEsc.on("down", () => this.togglePause());
+    this.keyZ.on("down", () => this.toggleHide());
 
-    // Cops — distributed evenly, walkers far apart
+    // ============ Cops ============
     this.spawnCop("walker", 800, groundTopY, 600, 1100);
     this.spawnCop("light", 1700, groundTopY, 1700, 1700);
     this.spawnCop("walker", 2700, groundTopY, 2400, 3000);
@@ -214,39 +282,96 @@ export class GameScene extends Phaser.Scene {
     this.spawnCop("walker", 4300, groundTopY, 4000, 4700);
     this.spawnCop("walker", 5200, groundTopY, 5000, 5500);
 
-    // Cop colliders
     this.cops.forEach((c) => {
       this.physics.add.collider(c.sprite, this.platforms);
-      this.physics.add.overlap(this.player, c.sprite, () => this.bust());
+      this.physics.add.overlap(this.player, c.sprite, () => {
+        if (!this.hidingInDumpster) this.bust();
+      });
     });
 
     this.showTitleCard();
   }
 
+  // ============ Player body / scale ============
   private applyPlayerBody(crouching: boolean) {
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const bw = PLAYER_BODY_W;
     const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
     body.setSize(bw, bh, false);
-    // Center horizontally on the texture, anchor body to bottom of sprite
     const tw = this.player.width;
     const th = this.player.height;
     body.setOffset((tw - bw) / 2, th - bh);
-    this.player.setScale(PLAYER_W / tw, (crouching ? PLAYER_H * 0.65 : PLAYER_H) / th);
+    const visualH = crouching ? PLAYER_H * 0.7 : PLAYER_H;
+    this.player.setScale(PLAYER_W / tw, visualH / th);
   }
 
-  private drawGroundVisuals(grid: number[][]) {
+  // ============ Ground visuals — single tiled strip ============
+  private drawGroundVisuals(_grid: number[][]) {
+    const groundTopY = (LEVEL_HEIGHT - 2) * TILE;
+    const groundH = 2 * TILE;
+    // Continuous ground strip (asphalt)
+    const ground = this.add
+      .tileSprite(0, groundTopY, this.worldWidthPx, groundH, "tile")
+      .setOrigin(0, 0)
+      .setDepth(DEPTH_GROUND);
+    ground.setTileScale(64 / 1024, 64 / 1024); // scale source down to 64px tiles
+    ground.setTint(0x6e7282);
+
+    // Curb line
+    this.add
+      .rectangle(0, groundTopY, this.worldWidthPx, 4, 0x2a2d36)
+      .setOrigin(0, 0)
+      .setDepth(DEPTH_GROUND + 1);
+
+    // Decorative puddles
+    for (let i = 0; i < 12; i++) {
+      const x = 200 + i * 480 + Phaser.Math.Between(-40, 40);
+      const puddle = this.add.ellipse(x, groundTopY + 12, 90, 16, 0x1a2030, 0.6);
+      puddle.setDepth(DEPTH_GROUND + 1);
+    }
+
+    // Ledges — render as connected balconies with vertical supports to the ground
+    const grid = _grid;
+    const ledgeRuns: Array<{ x: number; y: number; len: number }> = [];
     for (let y = 0; y < grid.length; y++) {
+      let runStart = -1;
       for (let x = 0; x < grid[y].length; x++) {
-        if (grid[y][x] !== 0) {
-          const px = x * TILE + TILE / 2;
-          const py = y * TILE + TILE / 2;
-          const img = this.add.image(px, py, "tile");
-          img.setDisplaySize(TILE + 2, TILE + 2);
-          if (grid[y][x] === 2) img.setTint(0x6a6f7d);
-          else if (y > LEVEL_HEIGHT - 2) img.setTint(0x4a4f5a);
+        if (grid[y][x] === 2) {
+          if (runStart === -1) runStart = x;
+        } else if (runStart !== -1) {
+          ledgeRuns.push({ x: runStart, y, len: x - runStart });
+          runStart = -1;
         }
       }
+      if (runStart !== -1)
+        ledgeRuns.push({ x: runStart, y, len: grid[y].length - runStart });
+    }
+    for (const run of ledgeRuns) {
+      const px = run.x * TILE;
+      const py = run.y * TILE;
+      const w = run.len * TILE;
+      // Support pillar to ground
+      const pillarH = groundTopY - (py + TILE);
+      if (pillarH > 0) {
+        this.add
+          .rectangle(px + w / 2, py + TILE + pillarH / 2, w * 0.85, pillarH, 0x2b2f3a, 0.85)
+          .setDepth(DEPTH_GROUND);
+        // Window strip on pillar (warm light)
+        for (let i = 0; i < Math.floor(pillarH / 50); i++) {
+          this.add
+            .rectangle(px + w / 2, py + TILE + 30 + i * 50, w * 0.4, 14, 0xffd070, 0.55)
+            .setDepth(DEPTH_GROUND);
+        }
+      }
+      // Balcony deck
+      this.add
+        .rectangle(px + w / 2, py + TILE / 2, w, TILE, 0x4a4e58)
+        .setStrokeStyle(2, 0x1a1d24)
+        .setDepth(DEPTH_GROUND + 2);
+      // Railing
+      this.add
+        .rectangle(px + w / 2, py + 4, w, 6, 0x9aa1ad)
+        .setDepth(DEPTH_GROUND + 3);
     }
   }
 
@@ -280,30 +405,49 @@ export class GameScene extends Phaser.Scene {
       .setDepth(100)
       .setAlpha(0);
 
+    this.titleCardObjects = [card, go];
+
+    // click to dismiss
+    const dismiss = () => {
+      this.titleCardObjects.forEach((o) => o.destroy());
+      this.titleCardObjects = [];
+    };
+    this.input.once("pointerdown", dismiss);
+
     this.tweens.add({
       targets: go,
       alpha: 1,
       scale: { from: 0.5, to: 1.2 },
-      duration: 400,
-      delay: 700,
+      duration: 350,
+      delay: 400,
       yoyo: true,
       onComplete: () => {
-        card.destroy();
-        go.destroy();
+        if (this.titleCardObjects.length) dismiss();
       },
     });
     this.cameras.main.flash(300, 126, 200, 255);
   }
 
-  private spawnWall(x: number, groundY: number) {
-    const w = 140;
-    const h = 200;
+  // ============ Garage door (wall) ============
+  private spawnWall(x: number, groundY: number, taggable: boolean) {
+    const w = 160;
+    const h = 180;
     const cy = groundY - h / 2;
-    const sprite = this.add.image(x, cy, "wall_blank").setDisplaySize(w, h);
+    const sprite = this.add
+      .image(x, cy, "wall_blank")
+      .setDisplaySize(w, h)
+      .setDepth(DEPTH_WALL);
+
+    if (!taggable) {
+      // Pre-tagged or just decorative: skip zone, no indicator
+      sprite.setTint(0xb8b8c0);
+      return;
+    }
+
     const frame = this.add.graphics();
     frame.lineStyle(3, 0x7ec8ff, 0.85);
     frame.strokeRoundedRect(x - w / 2 - 4, cy - h / 2 - 4, w + 8, h + 8, 6);
-    frame.setDepth(0);
+    frame.setDepth(DEPTH_WALL + 1);
 
     this.tweens.add({
       targets: frame,
@@ -322,10 +466,11 @@ export class GameScene extends Phaser.Scene {
         strokeThickness: 6,
         align: "center",
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5)
+      .setDepth(DEPTH_WALL + 2);
     letters.setShadow(0, 0, "#7ec8ff", 12, true, true);
 
-    const zone = this.add.zone(x, groundY - 40, w + 80, 120);
+    const zone = this.add.zone(x, groundY - 40, w + 60, 120);
     this.physics.add.existing(zone, true);
 
     this.walls.push({
@@ -337,12 +482,51 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private spawnDumpster(x: number, y: number) {
-    const d = this.add.image(x, y, "dumpster").setDisplaySize(90, 70);
-    d.setDepth(5);
-    this.hidingSpots.push(d);
+  // ============ Dumpster (back + front layered for hide-inside effect) ============
+  private spawnDumpster(x: number, groundY: number) {
+    const W = 130;
+    const H = 100;
+    const cy = groundY - H / 2;
+
+    // Back layer (drawn behind player): top rim + lid
+    const back = this.add
+      .image(x, cy, "dumpster")
+      .setDisplaySize(W, H)
+      .setDepth(DEPTH_DUMPSTER_BACK);
+    // Use crop to show only top portion (lid + rear rim)
+    const tex = this.textures.get("dumpster").getSourceImage() as HTMLImageElement;
+    back.setCrop(0, 0, tex.width, tex.height * 0.45);
+
+    // Front layer (drawn over player) — full sprite
+    const front = this.add
+      .image(x, cy, "dumpster")
+      .setDisplaySize(W, H)
+      .setDepth(DEPTH_DUMPSTER_FRONT);
+    front.setCrop(0, tex.height * 0.35, tex.width, tex.height * 0.65);
+    // Adjust front position so the cropped region renders in correct screen Y
+    front.y = cy + (H * 0.35) / 2;
+
+    // Reset back's screen Y to upper half center
+    back.y = cy - (H * 0.275);
+
+    // Hide prompt
+    const prompt = this.add
+      .text(x, groundY - H - 24, "Z — СПРЯТАТЬСЯ", {
+        fontFamily: "'Courier New', monospace",
+        fontSize: "16px",
+        color: "#ffd400",
+        backgroundColor: "#0a0d1ad0",
+        padding: { x: 8, y: 4 },
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setDepth(DEPTH_HUD)
+      .setVisible(false);
+
+    this.dumpsters.push({ x, y: cy, back, front, prompt });
   }
 
+  // ============ Cop ============
   private spawnCop(
     kind: "walker" | "light",
     x: number,
@@ -350,8 +534,14 @@ export class GameScene extends Phaser.Scene {
     patrolMin: number,
     patrolMax: number,
   ) {
-    const sprite = this.physics.add.sprite(x, groundTopY - 60, kind === "walker" ? "cop_walker" : "cop_light");
+    const sprite = this.physics.add.sprite(
+      x,
+      groundTopY - COP_H / 2 - 4,
+      kind === "walker" ? "cop_walker" : "cop_light",
+    );
     sprite.setDisplaySize(COP_W, COP_H);
+    sprite.setDepth(DEPTH_COP);
+    sprite.setOrigin(0.5, 0.5);
     const body = sprite.body as Phaser.Physics.Arcade.Body;
     body.setSize(COP_BODY_W, COP_BODY_H, false);
     body.setOffset((sprite.width - COP_BODY_W) / 2, sprite.height - COP_BODY_H);
@@ -366,22 +556,34 @@ export class GameScene extends Phaser.Scene {
         strokeThickness: 4,
       })
       .setOrigin(0.5)
-      .setDepth(50);
+      .setDepth(DEPTH_HUD);
 
     let cone: Phaser.GameObjects.Graphics | undefined;
     if (kind === "light") {
       cone = this.add.graphics();
-      cone.setDepth(2);
+      cone.setDepth(DEPTH_LIGHT_CONE);
     }
 
-    // Determine starting direction (walk toward the larger end of patrol range)
     const center = (patrolMin + patrolMax) / 2;
     const startDir: 1 | -1 = x < center ? 1 : -1;
 
     if (kind === "walker") {
       sprite.setVelocityX(startDir * 60);
-      sprite.setFlipX(startDir < 0);
     }
+
+    // Cops face same way as hero relative to flip
+    sprite.setFlipX(this.copFlipFor(startDir));
+
+    // Idle/walk bobbing tween (always running, subtle)
+    const walkTween = this.tweens.add({
+      targets: sprite,
+      scaleY: { from: sprite.scaleY, to: sprite.scaleY * 0.97 },
+      duration: 240,
+      yoyo: true,
+      repeat: -1,
+      ease: "sine.inOut",
+      paused: kind !== "walker",
+    });
 
     this.cops.push({
       sprite,
@@ -394,7 +596,18 @@ export class GameScene extends Phaser.Scene {
       alertTimer: 0,
       alertIcon,
       cone,
+      walkTween,
     });
+  }
+
+  private heroFlipFor(dir: 1 | -1): boolean {
+    // dir = 1 means facing right
+    return dir === 1 ? HERO_FLIP_RIGHT : !HERO_FLIP_RIGHT;
+  }
+
+  private copFlipFor(dir: 1 | -1): boolean {
+    // Cops use same convention as hero
+    return dir === 1 ? HERO_FLIP_RIGHT : !HERO_FLIP_RIGHT;
   }
 
   private spawnEscapeMarker() {
@@ -413,7 +626,9 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5);
     arrow.setShadow(0, 0, "#ffa630", 12, true, true);
 
-    const portal = this.add.rectangle(0, 0, 80, 160, 0x000000, 0.8).setStrokeStyle(4, 0xffd400);
+    const portal = this.add
+      .rectangle(0, 0, 80, 160, 0x000000, 0.8)
+      .setStrokeStyle(4, 0xffd400);
 
     this.escapeMarker = this.add.container(x, y, [portal, arrow]);
     this.escapeMarker.setDepth(20);
@@ -493,14 +708,50 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private isHiding(): boolean {
-    if (!this.keyZ.isDown) return false;
-    for (const d of this.hidingSpots) {
+  private findNearestDumpster(): Dumpster | undefined {
+    let best: Dumpster | undefined;
+    let bestDist = 70;
+    for (const d of this.dumpsters) {
       const dx = Math.abs(this.player.x - d.x);
       const dy = Math.abs(this.player.y - d.y);
-      if (dx < 60 && dy < 80) return true;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dx < 70 && dy < 90 && dist < bestDist) {
+        best = d;
+        bestDist = dist;
+      }
     }
-    return false;
+    return best;
+  }
+
+  private toggleHide() {
+    if (this.gameEnded || this.dumpsterCooldown > 0) return;
+    if (this.hidingInDumpster) {
+      this.exitDumpster();
+    } else if (this.nearDumpster) {
+      this.enterDumpster(this.nearDumpster);
+    }
+  }
+
+  private enterDumpster(d: Dumpster) {
+    this.hidingInDumpster = true;
+    this.dumpsterCooldown = 200;
+    // snap player into dumpster
+    this.player.setVelocity(0, 0);
+    this.player.x = d.x;
+    this.player.y = d.y - 8;
+    this.player.setAlpha(0.55);
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    body.setAllowGravity(false);
+    d.prompt.setText("Z — ВЫЛЕЗТИ");
+  }
+
+  private exitDumpster() {
+    this.hidingInDumpster = false;
+    this.dumpsterCooldown = 200;
+    this.player.setAlpha(1);
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    body.setAllowGravity(true);
+    if (this.nearDumpster) this.nearDumpster.prompt.setText("Z — СПРЯТАТЬСЯ");
   }
 
   private getNearbyWall(): WallData | undefined {
@@ -521,7 +772,8 @@ export class GameScene extends Phaser.Scene {
 
   private updateTagging(delta: number, reg: GameRegistry) {
     const wall = this.getNearbyWall();
-    if (this.keyX.isDown && wall) {
+    const spraying = this.keyX.isDown && wall && !this.hidingInDumpster;
+    if (spraying) {
       this.currentWall = wall;
       reg.spraying = true;
       wall.progress = Math.min(1, wall.progress + delta / 2000);
@@ -531,11 +783,27 @@ export class GameScene extends Phaser.Scene {
 
       reg.heat = Math.min(reg.maxHeat, reg.heat + delta * 0.012);
 
-      if (Math.random() < 0.3) {
+      // Spray hand jitter
+      if (!this.sprayShakeTween || !this.sprayShakeTween.isPlaying()) {
+        this.sprayShakeTween = this.tweens.add({
+          targets: this.player,
+          angle: { from: -2, to: 2 },
+          duration: 90,
+          yoyo: true,
+          repeat: -1,
+        });
+      }
+
+      if (Math.random() < 0.5) {
         const fx = this.add
-          .image(this.player.x + this.facing * 30, this.player.y - 10, "spray_fx")
+          .image(
+            this.player.x + this.facing * 30 + Phaser.Math.Between(-6, 6),
+            this.player.y - 10 + Phaser.Math.Between(-6, 6),
+            "spray_fx",
+          )
           .setDisplaySize(28, 28)
-          .setAlpha(0.8);
+          .setAlpha(0.85)
+          .setDepth(DEPTH_PLAYER + 1);
         this.tweens.add({
           targets: fx,
           alpha: 0,
@@ -559,6 +827,11 @@ export class GameScene extends Phaser.Scene {
     } else {
       reg.spraying = false;
       this.currentWall = undefined;
+      if (this.sprayShakeTween) {
+        this.sprayShakeTween.stop();
+        this.sprayShakeTween = undefined;
+        this.player.setAngle(0);
+      }
     }
   }
 
@@ -577,28 +850,30 @@ export class GameScene extends Phaser.Scene {
       const dist = Math.sqrt(dx * dx + dy * dy);
       const sameLevel = Math.abs(dy) < 80;
 
-      // Patrol behavior — walker only
+      // Patrol — walker only
       if (cop.kind === "walker" && cop.state === "patrol") {
         if (s.x <= cop.patrolMin) cop.dir = 1;
         else if (s.x >= cop.patrolMax) cop.dir = -1;
         cop.facing = cop.dir;
         s.setVelocityX(cop.dir * 60);
-        s.setFlipX(cop.dir < 0);
+        s.setFlipX(this.copFlipFor(cop.dir));
+        // ensure walk tween playing
+        if (cop.walkTween && !cop.walkTween.isPlaying()) cop.walkTween.resume();
       }
 
       const facingPlayer =
         (cop.facing === 1 && dx > 0) || (cop.facing === -1 && dx < 0);
 
-      // Walker vision: a forward cone-ish range, only if not hidden
       const walkerCanSee =
         !playerHidden && sameLevel && facingPlayer && dist < baseSightRange;
 
-      // Light cop cone
       if (cop.kind === "light" && cop.cone) {
         cop.cone.clear();
         const coneLen = 280;
         const coneHalfAngle = 0.35;
-        const baseAngle = cop.facing === 1 ? 0 : Math.PI;
+        // Cone slowly sways
+        const sway = Math.sin(_time / 600) * 0.08;
+        const baseAngle = (cop.facing === 1 ? 0 : Math.PI) + sway;
         cop.cone.fillStyle(0xffd400, 0.18);
         cop.cone.beginPath();
         cop.cone.moveTo(s.x, s.y - 20);
@@ -621,7 +896,8 @@ export class GameScene extends Phaser.Scene {
         const baseAngle = cop.facing === 1 ? 0 : Math.PI;
         const ang = Math.atan2(dy + 20, dx);
         const angDiff = Phaser.Math.Angle.Wrap(ang - baseAngle);
-        coneSpot = dist < coneLen && Math.abs(angDiff) < coneHalfAngle && sameLevel;
+        coneSpot =
+          dist < coneLen && Math.abs(angDiff) < coneHalfAngle && sameLevel;
       }
 
       const spotted = cop.kind === "walker" ? walkerCanSee : coneSpot;
@@ -640,12 +916,11 @@ export class GameScene extends Phaser.Scene {
         cop.alertIcon.x = s.x;
         cop.alertIcon.y = s.y - 70;
 
-        // In alert, walker moves SLOWLY toward last known direction
         if (cop.kind === "walker") {
           const dir = (dx > 0 ? 1 : -1) as 1 | -1;
           cop.facing = dir;
           s.setVelocityX(dir * 90);
-          s.setFlipX(dir < 0);
+          s.setFlipX(this.copFlipFor(dir));
         }
 
         if (spotted) {
@@ -668,10 +943,10 @@ export class GameScene extends Phaser.Scene {
           const dir = (dx > 0 ? 1 : -1) as 1 | -1;
           cop.facing = dir;
           s.setVelocityX(dir * speed);
-          s.setFlipX(dir < 0);
+          s.setFlipX(this.copFlipFor(dir));
         } else {
           cop.facing = (dx > 0 ? 1 : -1) as 1 | -1;
-          s.setFlipX(cop.facing < 0);
+          s.setFlipX(this.copFlipFor(cop.facing));
         }
 
         if ((playerHidden && dist > 200) || dist > chaseRange + 200) {
@@ -684,8 +959,43 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // ============ Player walk tween mgmt ============
+  private startWalkTween() {
+    if (this.playerWalkTween && this.playerWalkTween.isPlaying()) return;
+    const baseY = this.player.scaleY;
+    this.playerWalkTween = this.tweens.add({
+      targets: this.player,
+      scaleY: { from: baseY, to: baseY * 0.96 },
+      duration: 220,
+      yoyo: true,
+      repeat: -1,
+      ease: "sine.inOut",
+    });
+  }
+
+  private stopWalkTween() {
+    if (this.playerWalkTween) {
+      this.playerWalkTween.stop();
+      this.playerWalkTween = undefined;
+    }
+  }
+
+  private squashLand() {
+    const sx = this.player.scaleX;
+    const sy = this.player.scaleY;
+    this.tweens.add({
+      targets: this.player,
+      scaleY: { from: sy * 0.85, to: sy },
+      scaleX: { from: sx * 1.08, to: sx },
+      duration: 120,
+      ease: "back.out",
+    });
+  }
+
   update(_time: number, delta: number) {
     if (this.isPaused || this.gameEnded) return;
+
+    this.dumpsterCooldown = Math.max(0, this.dumpsterCooldown - delta);
 
     const camX = this.cameras.main.scrollX;
     this.bgFar.tilePositionX = camX * 0.1;
@@ -694,13 +1004,37 @@ export class GameScene extends Phaser.Scene {
 
     const reg = this.registry.get("game") as GameRegistry;
 
-    // Hiding
-    const hiding = this.isHiding();
-    reg.hidden = hiding;
-    this.player.setAlpha(hiding ? 0.45 : 1);
+    // Find nearest dumpster — show prompt
+    const nd = this.findNearestDumpster();
+    if (this.nearDumpster && this.nearDumpster !== nd) {
+      this.nearDumpster.prompt.setVisible(false);
+    }
+    this.nearDumpster = nd;
+    if (nd) {
+      nd.prompt.setVisible(true);
+      nd.prompt.setText(this.hidingInDumpster ? "Z — ВЫЛЕЗТИ" : "Z — СПРЯТАТЬСЯ");
+    }
+
+    reg.hidden = this.hidingInDumpster;
+
+    if (this.hidingInDumpster) {
+      // Locked in dumpster — auto-exit on movement
+      const moved =
+        this.cursors.left?.isDown ||
+        this.cursors.right?.isDown ||
+        Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
+        Phaser.Input.Keyboard.JustDown(this.keySpace);
+      if (moved) this.exitDumpster();
+      else this.player.setVelocity(0, 0);
+      reg.crouching = false;
+      reg.spraying = false;
+      this.registry.set("game", reg);
+      this.events.emit("hudUpdate");
+      return;
+    }
 
     // Crouch — DOWN arrow
-    const wantCrouch = !!this.cursors.down?.isDown && !hiding;
+    const wantCrouch = !!this.cursors.down?.isDown;
     if (wantCrouch !== this.crouching) {
       this.crouching = wantCrouch;
       this.applyPlayerBody(this.crouching);
@@ -715,32 +1049,51 @@ export class GameScene extends Phaser.Scene {
     if (sneaking) speed = 130;
     if (this.crouching) speed = 90;
 
-    if (!hiding) {
-      if (left) {
-        this.player.setVelocityX(-speed);
-        this.facing = -1;
-        this.player.setFlipX(true);
-      } else if (right) {
-        this.player.setVelocityX(speed);
-        this.facing = 1;
-        this.player.setFlipX(false);
-      } else {
-        this.player.setVelocityX(this.player.body!.velocity.x * 0.8);
-      }
+    let moving = false;
+    if (left) {
+      this.player.setVelocityX(-speed);
+      this.facing = -1;
+      this.player.setFlipX(this.heroFlipFor(-1));
+      moving = true;
+    } else if (right) {
+      this.player.setVelocityX(speed);
+      this.facing = 1;
+      this.player.setFlipX(this.heroFlipFor(1));
+      moving = true;
     } else {
-      this.player.setVelocityX(0);
+      this.player.setVelocityX(this.player.body!.velocity.x * 0.8);
     }
 
-    // Jump (disabled while crouching or hiding)
+    // Jump
     const jumpPressed =
       Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
       Phaser.Input.Keyboard.JustDown(this.keySpace);
     const onGround = this.player.body!.blocked.down;
     if (onGround) this.jumpsLeft = 2;
-    if (jumpPressed && this.jumpsLeft > 0 && !hiding && !this.crouching) {
+    if (jumpPressed && this.jumpsLeft > 0 && !this.crouching) {
       this.player.setVelocityY(-520);
       this.jumpsLeft--;
+      // Stretch on takeoff
+      const sx = this.player.scaleX;
+      const sy = this.player.scaleY;
+      this.tweens.add({
+        targets: this.player,
+        scaleY: { from: sy, to: sy * 1.08 },
+        scaleX: { from: sx, to: sx * 0.92 },
+        duration: 120,
+        yoyo: true,
+        ease: "sine.out",
+      });
     }
+    // Landing squash
+    if (onGround && !this.wasOnGround) {
+      this.squashLand();
+    }
+    this.wasOnGround = onGround;
+
+    // Walk tween only when grounded + moving + not crouching
+    if (moving && onGround && !this.crouching) this.startWalkTween();
+    else this.stopWalkTween();
 
     this.updateTagging(delta, reg);
     this.updateCops(_time, delta, reg);

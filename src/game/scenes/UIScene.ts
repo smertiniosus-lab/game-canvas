@@ -70,19 +70,19 @@ export class UIScene extends Phaser.Scene {
       .setOrigin(0, 0);
 
     this.hiddenIcon = this.add
-      .text(w / 2, this.scale.height - 50, "● СПРЯТАЛСЯ", {
+      .text(40, this.scale.height - 50, "● В БАКЕ", {
         fontFamily: "'Courier New', monospace",
-        fontSize: "22px",
+        fontSize: "20px",
         color: "#7ec8ff",
         backgroundColor: "#0a0d1ad8",
-        padding: { x: 14, y: 6 },
+        padding: { x: 12, y: 5 },
         fontStyle: "bold",
       })
-      .setOrigin(0.5)
+      .setOrigin(0, 0.5)
       .setVisible(false);
 
     this.sprayIcon = this.add
-      .text(w / 2, this.scale.height - 100, "✦ КРАСИТ ✦", {
+      .text(w / 2, this.scale.height - 50, "✦ КРАСИТ ✦", {
         fontFamily: "'Courier New', monospace",
         fontSize: "22px",
         color: "#ffd400",
@@ -94,7 +94,7 @@ export class UIScene extends Phaser.Scene {
       .setVisible(false);
 
     this.crouchIcon = this.add
-      .text(w / 2 - 180, this.scale.height - 50, "▼ ПРИСЕЛ", {
+      .text(w - 40, this.scale.height - 50, "▼ ПРИСЕЛ", {
         fontFamily: "'Courier New', monospace",
         fontSize: "20px",
         color: "#ffa630",
@@ -102,7 +102,7 @@ export class UIScene extends Phaser.Scene {
         padding: { x: 12, y: 5 },
         fontStyle: "bold",
       })
-      .setOrigin(0.5)
+      .setOrigin(1, 0.5)
       .setVisible(false);
 
     const gameScene = this.scene.get("GameScene");

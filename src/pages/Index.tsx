@@ -48,7 +48,7 @@ const Index = () => {
 
       <p className="mx-auto mt-3 max-w-[1400px] text-center font-mono text-sm text-[hsl(var(--neon-cyan))] sm:text-base">
         Кликни по игре, чтобы захватить фокус. ← → идти · SHIFT красться · SPACE/↑ прыжок · ↓
-        присесть · X баллончик (удерживать) · Z спрятаться · ESC пауза
+        присесть · X баллончик (удерживать у гаража) · Z спрятаться/вылезти из бака · ESC пауза
       </p>
     </main>
   );
