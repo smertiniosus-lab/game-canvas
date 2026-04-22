@@ -899,8 +899,11 @@ export class GameScene extends Phaser.Scene {
 
       if (wall.progress >= 1 && !wall.done) {
         wall.done = true;
-        wall.sprite.setTexture("wall_tagged");
-        wall.letters.setText("");
+        // Keep original wall texture; lock the SNAF tag on top
+        wall.letters.setText("SNAF");
+        wall.letters.setColor("#ffd400");
+        wall.letters.setStroke("#1a0a00", 8);
+        wall.marker.setVisible(false);
         reg.tags++;
         reg.heat = Math.min(reg.maxHeat, reg.heat + 18);
         this.cameras.main.flash(120, 255, 212, 0);
