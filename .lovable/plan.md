@@ -1,73 +1,103 @@
 
 
-# Фиксы: дрожь героя и сплющивание при приседании
+# Минимально рабочее состояние: фикс мгновенного проигрыша
 
-## Причины
+## Корень бага
 
-### 1. Сплющивание при `↓` до пола
-В `applyPlayerBody(true)`:
-- `body.setSize(28, 48)` + `setOffset(..., th - 48)` сдвигает физтело в **нижние 48px** спрайта.
-- `setScale(..., 0.7 * PLAYER_H / th)` уменьшает **визуальный размер** на 30%.
-- Origin = `0.5, 0.5` → центр спрайта остаётся на той же Y. Но физтело теперь привязано к нижней части маленького спрайта, поэтому гравитация подтягивает спрайт вниз → визуально герой «проседает в пол» и выглядит сплющенным (только голова торчит).
-
-### 2. Постоянная дрожь
-- `squashLand` и jump-tween используют `sx = this.player.scaleX` как **baseline для возврата**. Но если landing случается в момент, когда scale ещё не вернулся от предыдущего tween (а `killTweensOf` обрывает его), baseline сохраняется кривым → накопление искажений.
-- `wasOnGround` иногда флипается между кадрами при касании пола (физика подбрасывает на 1 пиксель), что вызывает повторные `squashLand` подряд → постоянная мелкая дрожь.
-
-## Фикс
-
-### A. Хранить базовый scale явно
-Ввести поля `baseScaleX`, `baseScaleY`. В `applyPlayerBody` после `setScale(...)` сохранять их. Все tweens (`squashLand`, jump-stretch) делать **от/к этим baseline-значениям**, а не от `this.player.scaleX`. Тогда никакого накопления искажений нет.
+В `create()` после спавна игрока вызывается `applyPlayerBody(false)`. Внутри:
 
 ```ts
-// в applyPlayerBody после setScale:
-this.baseScaleX = this.player.scaleX;
-this.baseScaleY = this.player.scaleY;
-
-// squashLand:
-this.tweens.add({
-  targets: this.player,
-  scaleY: { from: this.baseScaleY * 0.88, to: this.baseScaleY },
-  scaleX: { from: this.baseScaleX * 1.06, to: this.baseScaleX },
-  ...
-});
-```
-
-### B. Не убивать ВСЕ tweens — только scale/angle
-`this.tweens.killTweensOf(this.player)` убивает и позиционные tweens (если будут). Заменить на безопасное:
-```ts
-this.tweens.killTweensOf(this.player, ['scaleX', 'scaleY', 'angle']);
-```
-И **не вызывать** kill в `applyPlayerBody`, если crouching-состояние не изменилось (а оно уже проверяется в `update`, там и так срабатывает только при изменении).
-
-### C. Дебаунс `squashLand`
-Ввести cooldown (`landCooldown = 0`), не запускать squash чаще 1 раза в 250 мс. Это устранит дрожь от микро-касаний пола.
-
-### D. Фикс приседания (не сплющивать в пол)
-Убрать визуальное уменьшение спрайта при crouching — оставить **только уменьшение body** для геймплея (низкий профиль для конуса света/обзора копа). Спрайт остаётся в полную высоту, но **слегка наклоняется вперёд** (`angle = ±5`) для визуальной обратной связи. Альтернативно: визуально приседаем через смещение origin Y, не через scale — но это ломает позицию относительно земли.
-
-**Выбираем**: при `crouching = true` оставляем `visualH = PLAYER_H` (никакого уменьшения), но body становится 48px и расположено в нижней части. Спрайт получает `setAngle(facing > 0 ? 8 : -8)` — лёгкий наклон вперёд как индикация. Голова чуть-чуть «сжимается» через `scaleY = baseScaleY * 0.9` — без проседания в пол.
-
-Дополнительно: при выходе из приседа — явный `setAngle(0)` и `setScale(baseScaleX, baseScaleY)` через мгновенный tween (50 мс).
-
-### E. Корректное позиционирование при смене body
-При изменении высоты body герой должен оставаться **стоящим на земле**. После `body.setSize/setOffset` принудительно сместить `player.y` так, чтобы низ body совпал с предыдущим низом body:
-```ts
-const oldBottom = body.y + body.height; // до изменения
+const body = this.player.body as Phaser.Physics.Arcade.Body;
+const oldBottom = body.y + body.height;  // body ещё не инициализирован!
 body.setSize(bw, bh, false);
 body.setOffset(...);
 const newBottom = body.y + body.height;
-this.player.y += (oldBottom - newBottom);
+this.player.y += oldBottom - newBottom;
 ```
+
+На первом вызове `body.y` и `body.height` соответствуют исходной текстуре `hero.png` (1024×1024) — `body.height ≈ 1024`. После `setSize(28, 84)` `newBottom` становится разумным числом. Разница `oldBottom - newBottom` — огромная (несколько сотен пикселей), и `player.y` уезжает вниз за пределы экрана → срабатывает `if (this.player.y > this.scale.height + 100) this.bust()` → мгновенный Game Over.
+
+Тот же риск есть при первом switch crouch (если `applyPlayerBody` запускается до того, как физика обновила `body.y`).
+
+## Дополнительные мелочи, которые тоже стоит починить для «минимально рабочего» состояния
+
+1. **`tweens.killTweensOf(this.player)` в `applyPlayerBody`** — на первом вызове `this.player` уже создан, всё ок, но при последующих вызовах из `update` мы убиваем walk-twin и spray-jitter одновременно с фактическим срабатыванием — это норм, оставляем.
+
+2. **`applyPlayerBody` в первый раз вызывается до того, как физика «осела»** — лучше пропустить y-коррекцию на самом первом вызове.
+
+3. **Высокая шапка (160-220px) у некоторых стен** при `groundY = (LEVEL_HEIGHT-2)*TILE = 12*64 = 768` — стена-киоск (h=220) центрируется на `cy = 768 - 110 = 658`, верх стены на `658 - 110 = 548`. Это ок, но `player` спавнится на `y = 768 - 60 = 708`, что **внутри** стены-гаража, если бы там она была — но игрок на x=120, гаражи начинаются с x=400. Безопасно.
+
+4. **Стрелки-маркеры над стенами** добавляются в `container(0, 0, [glow, arrow])` — но `glow` и `arrow` уже размещены в мировых координатах. Контейнер с позицией (0,0) их не двигает, но `setDepth(DEPTH_HUD - 5)` на контейнере не пробрасывается на детей, у которых уже свой depth. Это работает, но костыльно.
+
+## Фикс
+
+### A. Фикс мгновенного проигрыша (главное)
+
+В `applyPlayerBody` ввести флаг `bodyInitialized = false`. На первом вызове **пропускать** y-коррекцию (просто выставить body, без `player.y += ...`). На последующих — корректировать как сейчас.
+
+```ts
+private bodyInitialized = false;
+
+private applyPlayerBody(crouching: boolean) {
+  if (this.player) this.tweens.killTweensOf(this.player);
+  const body = this.player.body as Phaser.Physics.Arcade.Body;
+  const bw = PLAYER_BODY_W;
+  const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
+
+  let oldBottom = 0;
+  if (this.bodyInitialized) {
+    oldBottom = body.y + body.height;
+  }
+  body.setSize(bw, bh, false);
+  const tw = this.player.width;
+  const th = this.player.height;
+  body.setOffset((tw - bw) / 2, th - bh);
+
+  if (this.bodyInitialized) {
+    const newBottom = body.y + body.height;
+    this.player.y += oldBottom - newBottom;
+  }
+  this.bodyInitialized = true;
+
+  this.player.setScale(PLAYER_W / tw, PLAYER_H / th);
+  this.baseScaleX = this.player.scaleX;
+  this.baseScaleY = this.player.scaleY;
+  if (crouching) {
+    this.player.setScale(this.baseScaleX, this.baseScaleY * 0.9);
+    this.player.setAngle(this.facing > 0 ? 6 : -6);
+  } else {
+    this.player.setAngle(0);
+  }
+}
+```
+
+И сбрасывать `bodyInitialized = false` в начале `create()`.
+
+### B. Подстраховка от падения за карту
+
+Сейчас `if (this.player.y > this.scale.height + 100) this.bust()` использует `scale.height` (≈720). Это должно сравниваться с границей мира, не вьюпорта. Заменить на `physics.world.bounds.height + 100` — мир уже ограничен `setCollideWorldBounds(true)`, так что игрок физически не вылетит. Это второй слой защиты.
+
+### C. Поднять стартовую позицию игрока
+
+Спавнить игрока чуть выше, чтобы он точно «упал» на платформу, а не оказался **внутри** тайла:
+```ts
+this.player = this.physics.add.sprite(120, groundTopY - 100, "hero");
+```
+(было `-60` — при PLAYER_H=100 и origin центра, низ спрайта на `groundTopY`, что точно на верхней границе тайла. Безопаснее `-100`.)
+
+### D. Защита от срабатывания `bust()` пока титульная карточка показана
+
+Добавить `if (this.titleCardObjects.length > 0) return;` в начало `update` после проверок паузы, чтобы геймплейная логика (включая копов и проверку y) не запускалась первые секунды. Альтернативно — игнорировать столкновения с копами первые 1.5 сек через `time.delayedCall(1500, () => { /* enable cop overlap */ })`. Выбираем первый вариант (проще).
 
 ## Файлы
 
 | Файл | Изменения |
 |---|---|
-| `src/game/scenes/GameScene.ts` | Поля `baseScaleX/Y`, `landCooldown`; `applyPlayerBody`: сохранение baseline, корректировка `player.y` для сохранения позиции ног, убрать визуальное уменьшение при crouch (заменить на лёгкий наклон); `squashLand`/jump-tween: от baseline вместо текущего scale, debounce; `killTweensOf(player, ['scaleX','scaleY','angle'])` вместо общего kill |
+| `src/game/scenes/GameScene.ts` | (A) поле `bodyInitialized`, фикс `applyPlayerBody` чтобы не корректировать y на первом вызове; сброс флага в `create()`. (B) использовать `physics.world.bounds.height + 100` вместо `scale.height + 100` в проверке падения. (C) поднять стартовый Y игрока на `-100`. (D) early-return в `update` пока показана title card. |
 
 ## Что НЕ войдёт
-- Перерисовка ассетов, спрайт-листы, новые механики.
 
-После применения: при `↓` герой остаётся стоять на земле, чуть пригнувшись (без проседания); вне приседа — никакой постоянной дрожи, scale возвращается к стабильному baseline.
+- Перерисовка ассетов, новые механики, звук.
+
+После применения: при старте появляется title card, игрок стоит на земле, не проигрывает мгновенно; крауч работает корректно; падение за карту корректно детектируется.
 
