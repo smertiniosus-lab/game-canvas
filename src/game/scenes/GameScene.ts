@@ -833,6 +833,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private getNearbyWall(): WallData | undefined {
+    let best: WallData | undefined;
+    let bestDist = Infinity;
     for (const w of this.walls) {
       if (w.done) continue;
       const zb = w.zone.body as Phaser.Physics.Arcade.StaticBody;
@@ -842,10 +844,14 @@ export class GameScene extends Phaser.Scene {
         this.player.y > zb.y &&
         this.player.y < zb.y + zb.height
       ) {
-        return w;
+        const d = Math.abs(this.player.x - w.x);
+        if (d < bestDist) {
+          bestDist = d;
+          best = w;
+        }
       }
     }
-    return undefined;
+    return best;
   }
 
   private updateTagging(delta: number, reg: GameRegistry) {
