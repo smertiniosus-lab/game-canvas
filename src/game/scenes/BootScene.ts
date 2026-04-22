@@ -35,6 +35,10 @@ export class BootScene extends Phaser.Scene {
     this.load.image("cop_light", "/game/cop_light.png");
     this.load.image("wall_blank", "/game/wall_blank.png");
     this.load.image("wall_tagged", "/game/wall_tagged.png");
+    this.load.image("wall_brick", "/game/wall_brick.png");
+    this.load.image("wall_concrete", "/game/wall_concrete.png");
+    this.load.image("wall_kiosk", "/game/wall_kiosk.png");
+    this.load.image("wall_fence", "/game/wall_fence.png");
     this.load.image("tile", "/game/tile_ground.png");
     this.load.image("bg_far", "/game/bg_far.jpg");
     this.load.image("bg_mid", "/game/bg_mid.png");
