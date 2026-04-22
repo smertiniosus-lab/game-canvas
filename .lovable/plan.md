@@ -1,103 +1,104 @@
 
 
-# Минимально рабочее состояние: фикс мгновенного проигрыша
+# Фикс: огромная текстура SNAF поверх стены и нетэгабельные места
 
-## Корень бага
+## Корень бага №1 (огромный гараж с обводкой)
 
-В `create()` после спавна игрока вызывается `applyPlayerBody(false)`. Внутри:
-
+В `updateTagging` после завершения тэгинга:
 ```ts
-const body = this.player.body as Phaser.Physics.Arcade.Body;
-const oldBottom = body.y + body.height;  // body ещё не инициализирован!
-body.setSize(bw, bh, false);
-body.setOffset(...);
-const newBottom = body.y + body.height;
-this.player.y += oldBottom - newBottom;
+wall.sprite.setTexture("wall_tagged");
 ```
 
-На первом вызове `body.y` и `body.height` соответствуют исходной текстуре `hero.png` (1024×1024) — `body.height ≈ 1024`. После `setSize(28, 84)` `newBottom` становится разумным числом. Разница `oldBottom - newBottom` — огромная (несколько сотен пикселей), и `player.y` уезжает вниз за пределы экрана → срабатывает `if (this.player.y > this.scale.height + 100) this.bust()` → мгновенный Game Over.
+**Что не так**:
+1. `setTexture()` в Phaser **сбрасывает displaySize обратно к нативному размеру текстуры** — а `wall_tagged.png` сгенерирована в высоком разрешении (≈1024px). Поэтому стена раздувается на пол-экрана.
+2. `wall_tagged` — это **всегда текстура гаража с надписью SNAF**, независимо от того, что было: кирпич, бетон, забор, ларёк. То есть кирпичная стена после тэгa превращается в гараж — визуальный кошмар.
 
-Тот же риск есть при первом switch crouch (если `applyPlayerBody` запускается до того, как физика обновила `body.y`).
+## Корень бага №2 (нельзя тэгать)
 
-## Дополнительные мелочи, которые тоже стоит починить для «минимально рабочего» состояния
-
-1. **`tweens.killTweensOf(this.player)` в `applyPlayerBody`** — на первом вызове `this.player` уже создан, всё ок, но при последующих вызовах из `update` мы убиваем walk-twin и spray-jitter одновременно с фактическим срабатыванием — это норм, оставляем.
-
-2. **`applyPlayerBody` в первый раз вызывается до того, как физика «осела»** — лучше пропустить y-коррекцию на самом первом вызове.
-
-3. **Высокая шапка (160-220px) у некоторых стен** при `groundY = (LEVEL_HEIGHT-2)*TILE = 12*64 = 768` — стена-киоск (h=220) центрируется на `cy = 768 - 110 = 658`, верх стены на `658 - 110 = 548`. Это ок, но `player` спавнится на `y = 768 - 60 = 708`, что **внутри** стены-гаража, если бы там она была — но игрок на x=120, гаражи начинаются с x=400. Безопасно.
-
-4. **Стрелки-маркеры над стенами** добавляются в `container(0, 0, [glow, arrow])` — но `glow` и `arrow` уже размещены в мировых координатах. Контейнер с позицией (0,0) их не двигает, но `setDepth(DEPTH_HUD - 5)` на контейнере не пробрасывается на детей, у которых уже свой depth. Это работает, но костыльно.
+Зона тэгинга `add.zone(x, groundY - 40, w + 60, 120)` имеет origin (0.5, 0.5), её центр на `y = groundY - 40`, высота 120 → диапазон Y от `groundY - 100` до `groundY + 20`. Игрок стоит ногами на `groundY`, центр на `groundY - 50` (PLAYER_H=100). Это попадает в зону **только если игрок на земле**. Но:
+- На **узких** проходах между стенами или у высоких стен (kiosk h=220) визуально стена «уходит вверх», а зона остаётся низкой — игрок ожидает, что подойдя вплотную «к стене» он покрасит, но стена-спрайт занимает выше зоны.
+- Зона по X — `[x - (w+60)/2 .. x + (w+60)/2]`. При плотной группе и широких спрайтах зоны соседних стен **перекрываются**, а `getNearbyWall` возвращает первую попавшуюся — и если первая `done`, она пропускается, но если первая ещё активна, нельзя дотянуться до второй.
 
 ## Фикс
 
-### A. Фикс мгновенного проигрыша (главное)
+### A. Не менять текстуру при готовности — оставить надпись SNAF поверх
 
-В `applyPlayerBody` ввести флаг `bodyInitialized = false`. На первом вызове **пропускать** y-коррекцию (просто выставить body, без `player.y += ...`). На последующих — корректировать как сейчас.
+Вместо `wall.sprite.setTexture("wall_tagged")`:
 
 ```ts
-private bodyInitialized = false;
+// Оставляем оригинальную текстуру стены, фиксируем SNAF поверх
+wall.letters.setText("SNAF");
+wall.letters.setColor("#ffd400");
+wall.letters.setStroke("#1a0a00", 8);
+wall.done = true;
+// Скрываем маркер-стрелку и свечение
+wall.marker.setVisible(false);
+```
 
-private applyPlayerBody(crouching: boolean) {
-  if (this.player) this.tweens.killTweensOf(this.player);
-  const body = this.player.body as Phaser.Physics.Arcade.Body;
-  const bw = PLAYER_BODY_W;
-  const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
+Преимущества:
+- Кирпич остаётся кирпичом, ларёк — ларьком, гараж — гаражом. Только надпись SNAF появляется поверх.
+- Никакого взрыва размера — `setDisplaySize` не сбрасывается.
+- Можно убрать загрузку `wall_tagged.png` из BootScene (или оставить как unused — ничего не сломает).
 
-  let oldBottom = 0;
-  if (this.bodyInitialized) {
-    oldBottom = body.y + body.height;
+### B. Если хочется именно «свежий тэгнутый» вид — fallback через альфа-overlay
+
+Альтернатива (на случай, если просто `letters` мало): после `done = true` добавить полупрозрачный цветной прямоугольник поверх стены (бирюзовое пятно краски через `add.rectangle` с blend mode), плюс надпись SNAF. Без подмены текстуры.
+
+**Выбираем A** — минимально достаточно и понятно визуально.
+
+### C. Расширить зону тэгинга по высоте
+
+Сделать высоту зоны зависящей от высоты стены, но достаточной чтобы покрывать игрока стоящего на земле:
+```ts
+const zoneH = Math.max(160, h + 40);
+const zoneCY = groundY - zoneH / 2 + 20; // чуть ниже верха стены
+const zone = this.add.zone(x, zoneCY, w + 80, zoneH);
+```
+
+Также по X дать чуть больше запаса (`w + 80` вместо `w + 60`) — игрок легче попадает в зону.
+
+### D. Приоритизация ближайшей стены
+
+В `getNearbyWall` если игрок попадает сразу в несколько зон (перекрытие при плотных группах), возвращать **ближайшую по X**, не первую попавшуюся:
+
+```ts
+private getNearbyWall(): WallData | undefined {
+  let best: WallData | undefined;
+  let bestDist = Infinity;
+  for (const w of this.walls) {
+    if (w.done) continue;
+    const zb = w.zone.body as Phaser.Physics.Arcade.StaticBody;
+    if (this.player.x > zb.x && this.player.x < zb.x + zb.width &&
+        this.player.y > zb.y && this.player.y < zb.y + zb.height) {
+      const d = Math.abs(this.player.x - w.x);
+      if (d < bestDist) { bestDist = d; best = w; }
+    }
   }
-  body.setSize(bw, bh, false);
-  const tw = this.player.width;
-  const th = this.player.height;
-  body.setOffset((tw - bw) / 2, th - bh);
-
-  if (this.bodyInitialized) {
-    const newBottom = body.y + body.height;
-    this.player.y += oldBottom - newBottom;
-  }
-  this.bodyInitialized = true;
-
-  this.player.setScale(PLAYER_W / tw, PLAYER_H / th);
-  this.baseScaleX = this.player.scaleX;
-  this.baseScaleY = this.player.scaleY;
-  if (crouching) {
-    this.player.setScale(this.baseScaleX, this.baseScaleY * 0.9);
-    this.player.setAngle(this.facing > 0 ? 6 : -6);
-  } else {
-    this.player.setAngle(0);
-  }
+  return best;
 }
 ```
 
-И сбрасывать `bodyInitialized = false` в начале `create()`.
+### E. Размер шрифта надписи под ширину стены
 
-### B. Подстраховка от падения за карту
-
-Сейчас `if (this.player.y > this.scale.height + 100) this.bust()` использует `scale.height` (≈720). Это должно сравниваться с границей мира, не вьюпорта. Заменить на `physics.world.bounds.height + 100` — мир уже ограничен `setCollideWorldBounds(true)`, так что игрок физически не вылетит. Это второй слой защиты.
-
-### C. Поднять стартовую позицию игрока
-
-Спавнить игрока чуть выше, чтобы он точно «упал» на платформу, а не оказался **внутри** тайла:
+Сейчас `fontSize: "60px"` для всех — на узких стенах (`fence` 220, `kiosk` 150) надпись «SNAF» вылезает за края или упирается в края. Сделать размер пропорциональным:
 ```ts
-this.player = this.physics.add.sprite(120, groundTopY - 100, "hero");
+const fontPx = Math.floor(Math.min(w * 0.32, h * 0.45, 72));
+const letters = this.add.text(x, cy, "", {
+  fontFamily: "'Impact', 'Arial Black', sans-serif",
+  fontSize: `${fontPx}px`,
+  ...
+});
 ```
-(было `-60` — при PLAYER_H=100 и origin центра, низ спрайта на `groundTopY`, что точно на верхней границе тайла. Безопаснее `-100`.)
-
-### D. Защита от срабатывания `bust()` пока титульная карточка показана
-
-Добавить `if (this.titleCardObjects.length > 0) return;` в начало `update` после проверок паузы, чтобы геймплейная логика (включая копов и проверку y) не запускалась первые секунды. Альтернативно — игнорировать столкновения с копами первые 1.5 сек через `time.delayedCall(1500, () => { /* enable cop overlap */ })`. Выбираем первый вариант (проще).
 
 ## Файлы
 
 | Файл | Изменения |
 |---|---|
-| `src/game/scenes/GameScene.ts` | (A) поле `bodyInitialized`, фикс `applyPlayerBody` чтобы не корректировать y на первом вызове; сброс флага в `create()`. (B) использовать `physics.world.bounds.height + 100` вместо `scale.height + 100` в проверке падения. (C) поднять стартовый Y игрока на `-100`. (D) early-return в `update` пока показана title card. |
+| `src/game/scenes/GameScene.ts` | (A) В `updateTagging` убрать `setTexture("wall_tagged")`, оставить `wall.letters.setText("SNAF")` поверх + скрыть маркер; (C) расширить зону тэгинга в `spawnWall`; (D) `getNearbyWall` — выбирать ближайшую по X стену; (E) размер шрифта `letters` пропорционален ширине/высоте стены |
 
 ## Что НЕ войдёт
 
-- Перерисовка ассетов, новые механики, звук.
+- Перерисовка ассетов, отдельные `*_tagged` текстуры под каждый kind, новые механики, звук.
 
-После применения: при старте появляется title card, игрок стоит на земле, не проигрывает мгновенно; крауч работает корректно; падение за карту корректно детектируется.
+После применения: при покраске стена остаётся той же поверхности (кирпич/бетон/гараж/забор/ларёк), на ней появляется аккуратная надпись SNAF без раздувания текстуры; зоны тэгинга шире и приоритизируют ближайшую стену — раскрашивать можно везде.
 
