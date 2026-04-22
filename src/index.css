@@ -54,10 +54,13 @@ All colors MUST be HSL.
 
     --sidebar-ring: 217.2 91.2% 59.8%;
 
-    /* Cuphead-style cartoon frame tokens */
-    --frame-bg: 38 60% 88%;
-    --frame-border: 26 45% 16%;
-    --frame-inner: 38 70% 94%;
+    /* SNAF night-city neon frame tokens */
+    --frame-bg: 230 30% 8%;
+    --frame-border: 230 35% 14%;
+    --frame-inner: 230 40% 5%;
+    --neon-cyan: 188 100% 50%;
+    --neon-magenta: 315 100% 58%;
+    --neon-yellow: 50 100% 50%;
   }
 
   .dark {

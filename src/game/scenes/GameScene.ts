@@ -1,47 +1,62 @@
 import Phaser from "phaser";
 
 const TILE = 64;
-const LEVEL_WIDTH = 80; // tiles
+const LEVEL_WIDTH = 90; // tiles
 const LEVEL_HEIGHT = 14;
 
-// Level layout: 1 = ground, 2 = floating platform, 0 = empty
-// Generate: ground row at bottom with some gaps, plus floating platforms
+interface GameRegistry {
+  tags: number;
+  totalTags: number;
+  heat: number;
+  maxHeat: number;
+  hidden: boolean;
+  spraying: boolean;
+}
+
+interface WallData {
+  sprite: Phaser.GameObjects.Image;
+  zone: Phaser.GameObjects.Zone;
+  progress: number; // 0..1
+  done: boolean;
+  letters: Phaser.GameObjects.Text;
+}
+
+interface CopData {
+  sprite: Phaser.Physics.Arcade.Sprite;
+  kind: "walker" | "light";
+  patrolMin: number;
+  patrolMax: number;
+  dir: 1 | -1;
+  state: "patrol" | "alert" | "chase";
+  alertTimer: number;
+  alertIcon: Phaser.GameObjects.Text;
+  cone?: Phaser.GameObjects.Graphics;
+  facing: 1 | -1;
+}
+
 function buildLevel(): number[][] {
   const grid: number[][] = [];
   for (let y = 0; y < LEVEL_HEIGHT; y++) {
     grid.push(new Array(LEVEL_WIDTH).fill(0));
   }
-  // Ground
+  // Sidewalk ground (2 rows thick)
   for (let x = 0; x < LEVEL_WIDTH; x++) {
-    // gaps
-    if ((x > 12 && x < 15) || (x > 28 && x < 31) || (x > 48 && x < 51)) continue;
     grid[LEVEL_HEIGHT - 1][x] = 1;
-    grid[LEVEL_HEIGHT - 2][x] = 1; // 2-tile thick ground for visuals
+    grid[LEVEL_HEIGHT - 2][x] = 1;
   }
-  // Floating platforms
-  const plats: Array<[number, number, number]> = [
-    [8, 9, 3],
-    [16, 8, 3],
-    [22, 7, 4],
-    [33, 9, 3],
-    [40, 8, 4],
-    [54, 9, 3],
-    [60, 7, 4],
-    [66, 8, 3],
+  // A few raised ledges (rooftops / awnings) to climb
+  const ledges: Array<[number, number, number]> = [
+    [10, 9, 3],
+    [22, 8, 4],
+    [38, 9, 3],
+    [52, 8, 4],
+    [68, 9, 3],
+    [78, 8, 3],
   ];
-  for (const [x, y, len] of plats) {
+  for (const [x, y, len] of ledges) {
     for (let i = 0; i < len; i++) grid[y][x + i] = 2;
   }
   return grid;
-}
-
-interface GameRegistry {
-  hp: number;
-  maxHp: number;
-  score: number;
-  bossHp: number;
-  bossMaxHp: number;
-  bossActive: boolean;
 }
 
 export class GameScene extends Phaser.Scene {
@@ -50,78 +65,86 @@ export class GameScene extends Phaser.Scene {
   private keyX!: Phaser.Input.Keyboard.Key;
   private keyZ!: Phaser.Input.Keyboard.Key;
   private keySpace!: Phaser.Input.Keyboard.Key;
+  private keyShift!: Phaser.Input.Keyboard.Key;
   private keyEsc!: Phaser.Input.Keyboard.Key;
 
   private platforms!: Phaser.Physics.Arcade.StaticGroup;
-  private bullets!: Phaser.Physics.Arcade.Group;
-  private enemyBullets!: Phaser.Physics.Arcade.Group;
-  private enemies!: Phaser.Physics.Arcade.Group;
-  private coins!: Phaser.Physics.Arcade.Group;
-  private boss?: Phaser.Physics.Arcade.Sprite;
+  private walls: WallData[] = [];
+  private hidingSpots: Phaser.GameObjects.Image[] = [];
+  private cops: CopData[] = [];
+  private escapeMarker?: Phaser.GameObjects.Container;
 
   private bgFar!: Phaser.GameObjects.TileSprite;
   private bgMid!: Phaser.GameObjects.TileSprite;
   private bgNear!: Phaser.GameObjects.TileSprite;
 
-  private lastShotAt = 0;
   private jumpsLeft = 2;
-  private jumpKeyHeld = false;
-  private dashCdUntil = 0;
-  private dashingUntil = 0;
-  private invulnUntil = 0;
   private facing: 1 | -1 = 1;
-  private bossPhase = 0;
-  private bossNextAttack = 0;
   private worldWidthPx = LEVEL_WIDTH * TILE;
   private isPaused = false;
+  private currentWall?: WallData;
+  private spotted = false;
+  private gameEnded = false;
 
   constructor() {
     super("GameScene");
   }
 
   create() {
+    this.gameEnded = false;
+    this.spotted = false;
+    this.walls = [];
+    this.hidingSpots = [];
+    this.cops = [];
+    this.currentWall = undefined;
+
     const cam = this.cameras.main;
     const viewW = this.scale.width;
     const viewH = this.scale.height;
 
-    // Reset registry
     const reg: GameRegistry = {
-      hp: 3,
-      maxHp: 3,
-      score: 0,
-      bossHp: 30,
-      bossMaxHp: 30,
-      bossActive: false,
+      tags: 0,
+      totalTags: 5,
+      heat: 0,
+      maxHeat: 100,
+      hidden: false,
+      spraying: false,
     };
     this.registry.set("game", reg);
 
-    // Parallax backgrounds
+    // Parallax backgrounds — night city
     this.bgFar = this.add
       .tileSprite(0, 0, viewW, viewH, "bg_far")
       .setOrigin(0, 0)
       .setScrollFactor(0);
-    // Scale far bg to fill height
     const farTex = this.textures.get("bg_far").getSourceImage() as HTMLImageElement;
     this.bgFar.setTileScale(viewH / farTex.height, viewH / farTex.height);
 
     this.bgMid = this.add
-      .tileSprite(0, viewH - 360, viewW, 360, "bg_mid")
+      .tileSprite(0, viewH - 380, viewW, 380, "bg_mid")
       .setOrigin(0, 0)
       .setScrollFactor(0);
-    this.bgMid.setTileScale(0.45, 0.45);
+    this.bgMid.setTileScale(0.5, 0.5);
+    this.bgMid.setAlpha(0.85);
 
     this.bgNear = this.add
       .tileSprite(0, viewH - 200, viewW, 200, "bg_near")
       .setOrigin(0, 0)
       .setScrollFactor(0);
-    this.bgNear.setTileScale(0.35, 0.35);
+    this.bgNear.setTileScale(0.4, 0.4);
 
-    // World
+    // Dark night overlay tint
+    this.add
+      .rectangle(0, 0, viewW, viewH, 0x0a0d1a, 0.25)
+      .setOrigin(0, 0)
+      .setScrollFactor(0);
+
+    // World bounds
     this.physics.world.setBounds(0, 0, this.worldWidthPx, viewH);
     cam.setBounds(0, 0, this.worldWidthPx, viewH);
-    cam.setBackgroundColor("#f3d36b");
+    cam.setBackgroundColor("#0a0d1a");
 
-    // Tiles
+    // Tiles + ground visuals
     this.platforms = this.physics.add.staticGroup();
     const grid = buildLevel();
     for (let y = 0; y < grid.length; y++) {
@@ -131,17 +154,28 @@ export class GameScene extends Phaser.Scene {
           const py = y * TILE + TILE / 2;
           const tile = this.platforms.create(px, py, "tile") as Phaser.Physics.Arcade.Sprite;
           tile.setDisplaySize(TILE, TILE).refreshBody();
-          tile.setVisible(false); // we draw our own visuals below
+          tile.setVisible(false);
         }
       }
     }
-    // Visual layer: draw a single ground band + platform sprites for performance
     this.drawGroundVisuals(grid);
+
+    // Walls to tag — placed along the level
+    const wallPositions = [400, 1200, 2000, 3000, 4400];
+    for (const wx of wallPositions) {
+      this.spawnWall(wx, (LEVEL_HEIGHT - 2) * TILE);
+    }
+
+    // Hiding spots (dumpsters) — distributed
+    const dumpsterPositions = [700, 1500, 2400, 3300, 4000, 5000];
+    for (const dx of dumpsterPositions) {
+      this.spawnDumpster(dx, (LEVEL_HEIGHT - 2) * TILE - 38);
+    }
 
     // Player
     const spawnY = (LEVEL_HEIGHT - 3) * TILE;
     this.player = this.physics.add.sprite(120, spawnY, "hero");
-    this.player.setDisplaySize(72, 88);
+    this.player.setDisplaySize(72, 96);
     this.player.body!.setSize(this.player.width * 0.45, this.player.height * 0.85);
     this.player.setCollideWorldBounds(true);
     this.player.setMaxVelocity(360, 900);
@@ -154,71 +188,24 @@ export class GameScene extends Phaser.Scene {
     this.keyX = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.X);
     this.keyZ = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
     this.keySpace = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.keyShift = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
     this.keyEsc = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
-
     this.keyEsc.on("down", () => this.togglePause());
 
-    // Groups
-    this.bullets = this.physics.add.group({ allowGravity: false, maxSize: 30 });
-    this.enemyBullets = this.physics.add.group({ allowGravity: false });
-    this.enemies = this.physics.add.group();
-    this.coins = this.physics.add.group({ allowGravity: false });
+    // Cops
+    this.spawnCop("walker", 900, spawnY, 700, 1300);
+    this.spawnCop("light", 1700, spawnY, 1700, 1700);
+    this.spawnCop("walker", 2600, spawnY, 2400, 2900);
+    this.spawnCop("light", 3500, spawnY, 3500, 3500);
+    this.spawnCop("walker", 4100, spawnY, 3900, 4500);
+    this.spawnCop("walker", 5200, spawnY, 5000, 5500);
 
-    // Spawn enemies
-    this.spawnEnemy("walker", 700, spawnY);
-    this.spawnEnemy("walker", 1500, spawnY);
-    this.spawnEnemy("walker", 2400, spawnY);
-    this.spawnEnemy("flyer", 1100, viewH - 420);
-    this.spawnEnemy("flyer", 2100, viewH - 460);
-    this.spawnEnemy("flyer", 3200, viewH - 420);
-    this.spawnEnemy("walker", 3600, spawnY);
-    this.spawnEnemy("walker", 4200, spawnY);
-
-    // Coins
-    const coinPositions: Array<[number, number]> = [
-      [400, spawnY - 120],
-      [560, spawnY - 120],
-      [720, spawnY - 120],
-      [1100, 9 * TILE - 40],
-      [1280, 8 * TILE - 40],
-      [1450, 7 * TILE - 40],
-      [2150, 9 * TILE - 40],
-      [2600, 8 * TILE - 40],
-      [3500, 9 * TILE - 40],
-      [3900, 7 * TILE - 40],
-      [4400, spawnY - 120],
-    ];
-    for (const [x, y] of coinPositions) this.spawnCoin(x, y);
-
-    // Boss spawn at end
-    this.spawnBoss(this.worldWidthPx - 500, spawnY - 60);
-
-    // Colliders
-    this.physics.add.collider(this.enemies, this.platforms);
-    this.physics.add.overlap(this.bullets, this.enemies, (b, e) =>
-      this.onBulletHitEnemy(b as Phaser.Physics.Arcade.Sprite, e as Phaser.Physics.Arcade.Sprite),
-    );
-    if (this.boss) {
-      this.physics.add.collider(this.boss, this.platforms);
-      this.physics.add.overlap(this.bullets, this.boss, (b) =>
-        this.onBulletHitBoss(b as Phaser.Physics.Arcade.Sprite),
-      );
-      this.physics.add.overlap(this.player, this.boss, () => this.takeDamage());
-    }
-    this.physics.add.overlap(this.player, this.enemies, () => this.takeDamage());
-    this.physics.add.overlap(this.player, this.enemyBullets, (_, b) => {
-      (b as Phaser.Physics.Arcade.Sprite).destroy();
-      this.takeDamage();
-    });
-    this.physics.add.overlap(this.player, this.coins, (_, c) => {
-      const reg = this.registry.get("game") as GameRegistry;
-      reg.score += 100;
-      this.registry.set("game", reg);
-      this.events.emit("hudUpdate");
-      (c as Phaser.Physics.Arcade.Sprite).destroy();
+    // Cop colliders
+    this.cops.forEach((c) => {
+      this.physics.add.collider(c.sprite, this.platforms);
+      this.physics.add.overlap(this.player, c.sprite, () => this.bust());
     });
 
-    // Title card flash
     this.showTitleCard();
   }
 
@@ -230,35 +217,37 @@ export class GameScene extends Phaser.Scene {
           const py = y * TILE + TILE / 2;
           const img = this.add.image(px, py, "tile");
           img.setDisplaySize(TILE + 2, TILE + 2);
-          // Slightly tint deeper rows
-          if (y > LEVEL_HEIGHT - 2) img.setTint(0xb88a55);
+          if (grid[y][x] === 2) img.setTint(0x6a6f7d);
+          else if (y > LEVEL_HEIGHT - 2) img.setTint(0x4a4f5a);
         }
       }
     }
   }
 
   private showTitleCard() {
-    const cam = this.cameras.main;
     const w = this.scale.width;
     const h = this.scale.height;
     const card = this.add
-      .text(w / 2, h / 2, "ROUND 1\nFOREST FRENZY", {
-        fontFamily: "Georgia, serif",
-        fontSize: "56px",
-        color: "#fff3d4",
+      .text(w / 2, h / 2, "TONIGHT'S MISSION\nTAG 5 WALLS", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "54px",
+        color: "#00e5ff",
         align: "center",
-        backgroundColor: "#3a2a1a",
+        backgroundColor: "#0a0d1ad8",
         padding: { x: 40, y: 24 },
+        stroke: "#000000",
+        strokeThickness: 6,
       })
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(100);
-    const fight = this.add
-      .text(w / 2, h / 2 + 130, "FIGHT!", {
-        fontFamily: "Georgia, serif",
-        fontSize: "72px",
-        color: "#c44b3a",
-        fontStyle: "bold",
+    const go = this.add
+      .text(w / 2, h / 2 + 130, "GO!", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "84px",
+        color: "#ffd400",
+        stroke: "#000000",
+        strokeThickness: 8,
       })
       .setOrigin(0.5)
       .setScrollFactor(0)
@@ -266,7 +255,7 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(0);
 
     this.tweens.add({
-      targets: fight,
+      targets: go,
       alpha: 1,
       scale: { from: 0.5, to: 1.2 },
       duration: 400,
@@ -274,183 +263,163 @@ export class GameScene extends Phaser.Scene {
       yoyo: true,
       onComplete: () => {
         card.destroy();
-        fight.destroy();
+        go.destroy();
       },
     });
-    cam.flash(300, 255, 243, 212);
+    this.cameras.main.flash(300, 0, 229, 255);
   }
 
-  private spawnEnemy(kind: "walker" | "flyer", x: number, y: number) {
-    const e = this.physics.add.sprite(x, y, kind);
-    e.setDisplaySize(64, 64);
-    e.setData("kind", kind);
-    e.setData("hp", kind === "walker" ? 2 : 2);
-    if (kind === "walker") {
-      e.setVelocityX(-60);
-      e.setData("dir", -1);
-      e.setBounce(0);
-    } else {
-      e.body!.gravity.y = -800; // cancel gravity for flyer (Arcade has world gravity)
-      e.setData("startY", y);
-      e.setData("startX", x);
-      e.setData("shootCd", 1500 + Math.random() * 1000);
-    }
-    this.enemies.add(e);
-  }
+  private spawnWall(x: number, groundY: number) {
+    const w = 140;
+    const h = 200;
+    const cy = groundY - h / 2;
+    const sprite = this.add.image(x, cy, "wall_blank").setDisplaySize(w, h);
+    // Highlight frame to show it's a target
+    const frame = this.add.graphics();
+    frame.lineStyle(3, 0x00e5ff, 0.85);
+    frame.strokeRoundedRect(x - w / 2 - 4, cy - h / 2 - 4, w + 8, h + 8, 6);
+    frame.setDepth(0);
 
-  private spawnCoin(x: number, y: number) {
-    const c = this.physics.add.sprite(x, y, "coin");
-    c.setDisplaySize(36, 36);
-    c.body!.allowGravity = false;
+    // Pulsing glow
     this.tweens.add({
-      targets: c,
-      y: y - 8,
-      duration: 700,
+      targets: frame,
+      alpha: { from: 0.85, to: 0.3 },
+      duration: 900,
+      yoyo: true,
+      repeat: -1,
+    });
+
+    // SNAF letters overlay (drawn progressively)
+    const letters = this.add
+      .text(x, cy, "", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "60px",
+        color: "#00e5ff",
+        stroke: "#000000",
+        strokeThickness: 6,
+        align: "center",
+      })
+      .setOrigin(0.5);
+    letters.setShadow(0, 0, "#ff2bd6", 12, true, true);
+
+    // Trigger zone (slightly wider than wall, in front of it on the ground)
+    const zone = this.add.zone(x, groundY - 40, w + 80, 120);
+    this.physics.add.existing(zone, true);
+
+    this.walls.push({
+      sprite,
+      zone,
+      progress: 0,
+      done: false,
+      letters,
+    });
+  }
+
+  private spawnDumpster(x: number, y: number) {
+    const d = this.add.image(x, y, "dumpster").setDisplaySize(90, 70);
+    d.setDepth(5);
+    this.hidingSpots.push(d);
+  }
+
+  private spawnCop(
+    kind: "walker" | "light",
+    x: number,
+    y: number,
+    patrolMin: number,
+    patrolMax: number,
+  ) {
+    const sprite = this.physics.add.sprite(x, y, kind === "walker" ? "cop_walker" : "cop_light");
+    sprite.setDisplaySize(72, 96);
+    sprite.body!.setSize(sprite.width * 0.45, sprite.height * 0.85);
+    sprite.setCollideWorldBounds(true);
+
+    const alertIcon = this.add
+      .text(x, y - 70, "", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "32px",
+        color: "#ffd400",
+        stroke: "#000000",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5)
+      .setDepth(50);
+
+    let cone: Phaser.GameObjects.Graphics | undefined;
+    if (kind === "light") {
+      cone = this.add.graphics();
+      cone.setDepth(2);
+    }
+
+    if (kind === "walker") {
+      sprite.setVelocityX(-50);
+    } else {
+      sprite.setVelocityX(0);
+    }
+
+    this.cops.push({
+      sprite,
+      kind,
+      patrolMin,
+      patrolMax,
+      dir: -1,
+      facing: -1,
+      state: "patrol",
+      alertTimer: 0,
+      alertIcon,
+      cone,
+    });
+  }
+
+  private spawnEscapeMarker() {
+    if (this.escapeMarker) return;
+    const x = this.worldWidthPx - 180;
+    const y = (LEVEL_HEIGHT - 3) * TILE;
+
+    const arrow = this.add
+      .text(0, -60, "▼ ESCAPE", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "36px",
+        color: "#ffd400",
+        stroke: "#000000",
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5);
+    arrow.setShadow(0, 0, "#ff2bd6", 12, true, true);
+
+    const portal = this.add.rectangle(0, 0, 80, 160, 0x000000, 0.8).setStrokeStyle(4, 0xffd400);
+
+    this.escapeMarker = this.add.container(x, y, [portal, arrow]);
+    this.escapeMarker.setDepth(20);
+
+    // Trigger zone
+    const zone = this.add.zone(x, y, 80, 160);
+    this.physics.add.existing(zone, true);
+    this.physics.add.overlap(this.player, zone, () => this.win());
+
+    this.tweens.add({
+      targets: arrow,
+      y: { from: -60, to: -80 },
+      duration: 500,
       yoyo: true,
       repeat: -1,
       ease: "sine.inOut",
     });
-    this.coins.add(c);
-  }
-
-  private spawnBoss(x: number, y: number) {
-    const b = this.physics.add.sprite(x, y, "boss");
-    b.setDisplaySize(180, 180);
-    b.body!.setSize(b.width * 0.6, b.height * 0.7);
-    b.setCollideWorldBounds(true);
-    b.setData("dir", -1);
-    this.boss = b;
-  }
-
-  private fireBullet() {
-    const now = this.time.now;
-    if (now - this.lastShotAt < 140) return;
-    this.lastShotAt = now;
-
-    const up = this.cursors.up?.isDown || this.keySpace.isDown;
-    const down = this.cursors.down?.isDown;
-    const left = this.cursors.left?.isDown;
-    const right = this.cursors.right?.isDown;
-
-    let vx = this.facing * 700;
-    let vy = 0;
-    if (up && !left && !right) {
-      vx = 0;
-      vy = -700;
-    } else if (down && !this.player.body!.blocked.down) {
-      vx = 0;
-      vy = 700;
-    } else if (up && (left || right)) {
-      vx = (left ? -1 : 1) * 500;
-      vy = -500;
-    }
-
-    const b = this.bullets.get(this.player.x + this.facing * 30, this.player.y - 10, "bullet") as
-      | Phaser.Physics.Arcade.Sprite
-      | null;
-    if (!b) return;
-    b.setActive(true).setVisible(true);
-    b.setDisplaySize(28, 28);
-    (b.body as Phaser.Physics.Arcade.Body).reset(this.player.x + this.facing * 30, this.player.y - 10);
-    b.setVelocity(vx, vy);
-    b.setRotation(Math.atan2(vy, vx));
-    this.time.delayedCall(900, () => {
-      if (b.active) {
-        b.setActive(false).setVisible(false);
-        (b.body as Phaser.Physics.Arcade.Body).reset(-100, -100);
-      }
-    });
-
-    // Recoil
-    this.player.setVelocityX(this.player.body!.velocity.x - this.facing * 25);
-  }
-
-  private onBulletHitEnemy(b: Phaser.Physics.Arcade.Sprite, e: Phaser.Physics.Arcade.Sprite) {
-    b.setActive(false).setVisible(false);
-    (b.body as Phaser.Physics.Arcade.Body).reset(-100, -100);
-    const hp = (e.getData("hp") as number) - 1;
-    e.setData("hp", hp);
-    e.setTintFill(0xffffff);
-    this.time.delayedCall(60, () => e.clearTint());
-    if (hp <= 0) {
-      const reg = this.registry.get("game") as GameRegistry;
-      reg.score += 250;
-      this.registry.set("game", reg);
-      this.events.emit("hudUpdate");
-      // Poof
-      this.cameras.main.shake(80, 0.003);
-      e.destroy();
-    }
-  }
-
-  private onBulletHitBoss(b: Phaser.Physics.Arcade.Sprite) {
-    b.setActive(false).setVisible(false);
-    (b.body as Phaser.Physics.Arcade.Body).reset(-100, -100);
-    if (!this.boss) return;
-    const reg = this.registry.get("game") as GameRegistry;
-    reg.bossHp = Math.max(0, reg.bossHp - 1);
-    this.registry.set("game", reg);
-    this.events.emit("hudUpdate");
-    this.boss.setTintFill(0xffffff);
-    this.time.delayedCall(60, () => this.boss?.clearTint());
-    if (reg.bossHp <= 0) {
-      this.cameras.main.shake(400, 0.02);
-      this.boss.destroy();
-      this.boss = undefined;
-      this.time.delayedCall(800, () => {
-        this.scene.stop("UIScene");
-        this.scene.start("GameOverScene", { victory: true, score: reg.score });
-      });
-    }
-  }
-
-  private takeDamage() {
-    const now = this.time.now;
-    if (now < this.invulnUntil) return;
-    this.invulnUntil = now + 1200;
-
-    const reg = this.registry.get("game") as GameRegistry;
-    reg.hp = Math.max(0, reg.hp - 1);
-    this.registry.set("game", reg);
-    this.events.emit("hudUpdate");
-
-    // Knockback
-    this.player.setVelocity(-this.facing * 250, -300);
-    this.cameras.main.shake(150, 0.01);
-
-    // Flash
-    const flashTween = this.tweens.add({
-      targets: this.player,
-      alpha: 0.2,
-      yoyo: true,
-      repeat: 6,
-      duration: 80,
-      onComplete: () => this.player.setAlpha(1),
-    });
-
-    if (reg.hp <= 0) {
-      flashTween.stop();
-      this.player.setAlpha(0.3);
-      this.time.delayedCall(700, () => {
-        this.scene.stop("UIScene");
-        this.scene.start("GameOverScene", { victory: false, score: reg.score });
-      });
-    }
   }
 
   private togglePause() {
+    if (this.gameEnded) return;
     this.isPaused = !this.isPaused;
     if (this.isPaused) {
       this.physics.world.pause();
       const w = this.scale.width;
       const h = this.scale.height;
-      const t = this.add
+      this.add
         .text(w / 2, h / 2, "PAUSED\n(press ESC to resume)", {
-          fontFamily: "Georgia, serif",
-          fontSize: "44px",
-          color: "#fff3d4",
+          fontFamily: "'Courier New', monospace",
+          fontSize: "40px",
+          color: "#00e5ff",
           align: "center",
-          backgroundColor: "#3a2a1ad8",
+          backgroundColor: "#0a0d1ad8",
           padding: { x: 40, y: 24 },
         })
         .setOrigin(0.5)
@@ -463,8 +432,236 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private bust() {
+    if (this.gameEnded) return;
+    this.gameEnded = true;
+    const reg = this.registry.get("game") as GameRegistry;
+    this.cameras.main.shake(300, 0.015);
+    this.cameras.main.flash(200, 255, 43, 214);
+    this.player.setTint(0xff2bd6);
+    this.physics.world.pause();
+    this.time.delayedCall(700, () => {
+      this.scene.stop("UIScene");
+      this.scene.start("GameOverScene", {
+        victory: false,
+        tags: reg.tags,
+        spotted: this.spotted,
+      });
+    });
+  }
+
+  private win() {
+    if (this.gameEnded) return;
+    const reg = this.registry.get("game") as GameRegistry;
+    if (reg.tags < reg.totalTags) return;
+    this.gameEnded = true;
+    this.cameras.main.flash(400, 0, 229, 255);
+    this.physics.world.pause();
+    this.time.delayedCall(500, () => {
+      this.scene.stop("UIScene");
+      this.scene.start("GameOverScene", {
+        victory: true,
+        tags: reg.tags,
+        spotted: this.spotted,
+      });
+    });
+  }
+
+  private isHiding(): boolean {
+    if (!this.keyZ.isDown) return false;
+    for (const d of this.hidingSpots) {
+      const dx = Math.abs(this.player.x - d.x);
+      const dy = Math.abs(this.player.y - d.y);
+      if (dx < 60 && dy < 80) return true;
+    }
+    return false;
+  }
+
+  private getNearbyWall(): WallData | undefined {
+    for (const w of this.walls) {
+      if (w.done) continue;
+      const zb = w.zone.body as Phaser.Physics.Arcade.StaticBody;
+      if (
+        this.player.x > zb.x &&
+        this.player.x < zb.x + zb.width &&
+        this.player.y > zb.y &&
+        this.player.y < zb.y + zb.height
+      ) {
+        return w;
+      }
+    }
+    return undefined;
+  }
+
+  private updateTagging(delta: number, reg: GameRegistry) {
+    const wall = this.getNearbyWall();
+    if (this.keyX.isDown && wall) {
+      this.currentWall = wall;
+      reg.spraying = true;
+      // 2 seconds to fully tag
+      wall.progress = Math.min(1, wall.progress + delta / 2000);
+      const letters = "SNAF";
+      const n = Math.floor(wall.progress * letters.length + 0.0001);
+      wall.letters.setText(letters.slice(0, n));
+
+      // Heat increases while spraying
+      reg.heat = Math.min(reg.maxHeat, reg.heat + delta * 0.012);
+
+      // Spray particles
+      if (Math.random() < 0.3) {
+        const fx = this.add
+          .image(this.player.x + this.facing * 30, this.player.y - 10, "spray_fx")
+          .setDisplaySize(28, 28)
+          .setAlpha(0.8);
+        this.tweens.add({
+          targets: fx,
+          alpha: 0,
+          scale: 1.6,
+          duration: 400,
+          onComplete: () => fx.destroy(),
+        });
+      }
+
+      if (wall.progress >= 1 && !wall.done) {
+        wall.done = true;
+        wall.sprite.setTexture("wall_tagged");
+        wall.letters.setText("");
+        reg.tags++;
+        reg.heat = Math.min(reg.maxHeat, reg.heat + 18);
+        this.cameras.main.flash(120, 255, 212, 0);
+        if (reg.tags >= reg.totalTags) {
+          this.spawnEscapeMarker();
+        }
+      }
+    } else {
+      reg.spraying = false;
+      this.currentWall = undefined;
+    }
+  }
+
+  private updateCops(time: number, delta: number, reg: GameRegistry) {
+    const playerHidden = reg.hidden;
+    const sneaking = this.keyShift.isDown;
+    const sightRange = sneaking ? 240 : 380;
+    const chaseRange = sneaking ? 320 : 520;
+
+    for (const cop of this.cops) {
+      const s = cop.sprite;
+      if (!s.active) continue;
+
+      const dx = this.player.x - s.x;
+      const dy = this.player.y - s.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const sameLevel = Math.abs(dy) < 100;
+
+      // Walker patrol
+      if (cop.kind === "walker" && cop.state === "patrol") {
+        if (s.x <= cop.patrolMin) {
+          cop.dir = 1;
+        } else if (s.x >= cop.patrolMax) {
+          cop.dir = -1;
+        }
+        cop.facing = cop.dir;
+        s.setVelocityX(cop.dir * 60);
+        s.setFlipX(cop.dir < 0);
+      }
+
+      // Vision check
+      const facingPlayer =
+        (cop.facing === 1 && dx > 0) || (cop.facing === -1 && dx < 0);
+      const canSee =
+        !playerHidden && sameLevel && facingPlayer && dist < sightRange;
+
+      // Light cop draws cone
+      if (cop.kind === "light" && cop.cone) {
+        cop.cone.clear();
+        const coneLen = 280;
+        const coneHalfAngle = 0.35;
+        const baseAngle = cop.facing === 1 ? 0 : Math.PI;
+        cop.cone.fillStyle(0xffd400, 0.18);
+        cop.cone.beginPath();
+        cop.cone.moveTo(s.x, s.y - 20);
+        cop.cone.lineTo(
+          s.x + Math.cos(baseAngle - coneHalfAngle) * coneLen,
+          s.y - 20 + Math.sin(baseAngle - coneHalfAngle) * coneLen,
+        );
+        cop.cone.lineTo(
+          s.x + Math.cos(baseAngle + coneHalfAngle) * coneLen,
+          s.y - 20 + Math.sin(baseAngle + coneHalfAngle) * coneLen,
+        );
+        cop.cone.closePath();
+        cop.cone.fillPath();
+      }
+
+      // For light cop, sight is the cone
+      let coneSpot = false;
+      if (cop.kind === "light" && !playerHidden) {
+        const coneLen = 280;
+        const coneHalfAngle = 0.35;
+        const baseAngle = cop.facing === 1 ? 0 : Math.PI;
+        const ang = Math.atan2(dy - -20, dx);
+        const angDiff = Phaser.Math.Angle.Wrap(ang - baseAngle);
+        coneSpot = dist < coneLen && Math.abs(angDiff) < coneHalfAngle && sameLevel;
+      }
+
+      const spotted = cop.kind === "walker" ? canSee : coneSpot;
+
+      if (spotted) {
+        this.spotted = true;
+        if (cop.state === "patrol") {
+          cop.state = "alert";
+          cop.alertTimer = 1500;
+        }
+        reg.heat = Math.min(reg.maxHeat, reg.heat + delta * 0.04);
+      }
+
+      if (cop.state === "alert") {
+        cop.alertIcon.setText("?").setColor("#ffd400");
+        cop.alertIcon.x = s.x;
+        cop.alertIcon.y = s.y - 70;
+        if (spotted) {
+          cop.alertTimer -= delta;
+          if (cop.alertTimer <= 0) {
+            cop.state = "chase";
+          }
+        } else {
+          cop.alertTimer -= delta * 0.5;
+          if (cop.alertTimer <= -800) {
+            cop.state = "patrol";
+            cop.alertIcon.setText("");
+          }
+        }
+        if (cop.kind === "walker") s.setVelocityX(0);
+      } else if (cop.state === "chase") {
+        cop.alertIcon.setText("!").setColor("#ff2bd6");
+        cop.alertIcon.x = s.x;
+        cop.alertIcon.y = s.y - 70;
+
+        if (cop.kind === "walker") {
+          const speed = 180;
+          const dir = dx > 0 ? 1 : -1;
+          cop.facing = dir as 1 | -1;
+          s.setVelocityX(dir * speed);
+          s.setFlipX(dir < 0);
+        } else {
+          // Light cop turns to face but doesn't leave post; fires alert
+          cop.facing = (dx > 0 ? 1 : -1) as 1 | -1;
+          s.setFlipX(cop.facing < 0);
+        }
+
+        // Lose interest if player hidden far enough or out of range
+        if ((playerHidden && dist > 200) || dist > chaseRange + 200) {
+          cop.state = "patrol";
+          cop.alertIcon.setText("");
+        }
+      } else {
+        cop.alertIcon.setText("");
+      }
+    }
+  }
+
   update(time: number, delta: number) {
-    if (this.isPaused) return;
+    if (this.isPaused || this.gameEnded) return;
 
     // Parallax
     const camX = this.cameras.main.scrollX;
@@ -472,23 +669,33 @@ export class GameScene extends Phaser.Scene {
     this.bgMid.tilePositionX = camX * 0.4;
     this.bgNear.tilePositionX = camX * 0.75;
 
-    // Movement
+    const reg = this.registry.get("game") as GameRegistry;
+
+    // Hiding
+    const hiding = this.isHiding();
+    reg.hidden = hiding;
+    this.player.setAlpha(hiding ? 0.45 : 1);
+
+    // Movement (disabled while hiding-still or while spraying actively)
     const left = this.cursors.left?.isDown;
     const right = this.cursors.right?.isDown;
-    const dashing = time < this.dashingUntil;
+    const sneaking = this.keyShift.isDown;
+    const speed = sneaking ? 130 : 240;
 
-    if (!dashing) {
+    if (!hiding) {
       if (left) {
-        this.player.setVelocityX(-260);
+        this.player.setVelocityX(-speed);
         this.facing = -1;
         this.player.setFlipX(true);
       } else if (right) {
-        this.player.setVelocityX(260);
+        this.player.setVelocityX(speed);
         this.facing = 1;
         this.player.setFlipX(false);
       } else {
         this.player.setVelocityX(this.player.body!.velocity.x * 0.8);
       }
+    } else {
+      this.player.setVelocityX(0);
     }
 
     // Jump
@@ -497,130 +704,29 @@ export class GameScene extends Phaser.Scene {
       Phaser.Input.Keyboard.JustDown(this.keySpace);
     const onGround = this.player.body!.blocked.down;
     if (onGround) this.jumpsLeft = 2;
-    if (jumpPressed && this.jumpsLeft > 0) {
+    if (jumpPressed && this.jumpsLeft > 0 && !hiding) {
       this.player.setVelocityY(-520);
       this.jumpsLeft--;
     }
 
-    // Shoot
-    if (this.keyX.isDown) this.fireBullet();
+    // Tagging
+    this.updateTagging(delta, reg);
 
-    // Dash
-    if (Phaser.Input.Keyboard.JustDown(this.keyZ) && time > this.dashCdUntil) {
-      this.dashingUntil = time + 220;
-      this.dashCdUntil = time + 700;
-      this.player.setVelocityX(this.facing * 700);
-      this.player.setVelocityY(0);
-      this.invulnUntil = Math.max(this.invulnUntil, time + 220);
-      // Dash trail
-      const ghost = this.add
-        .image(this.player.x, this.player.y, "hero")
-        .setDisplaySize(72, 88)
-        .setAlpha(0.5)
-        .setFlipX(this.facing < 0)
-        .setTint(0x66ccff);
-      this.tweens.add({
-        targets: ghost,
-        alpha: 0,
-        duration: 250,
-        onComplete: () => ghost.destroy(),
-      });
+    // Cops
+    this.updateCops(time, delta, reg);
+
+    // Heat decay when not actively bad
+    if (!reg.spraying && !this.cops.some((c) => c.state !== "patrol")) {
+      reg.heat = Math.max(0, reg.heat - delta * 0.008);
     }
 
     // Fell off world
     if (this.player.y > this.scale.height + 100) {
-      const reg = this.registry.get("game") as GameRegistry;
-      reg.hp = 0;
-      this.registry.set("game", reg);
-      this.events.emit("hudUpdate");
-      this.scene.stop("UIScene");
-      this.scene.start("GameOverScene", { victory: false, score: reg.score });
+      this.bust();
+      return;
     }
 
-    // Enemy AI
-    this.enemies.children.iterate((obj) => {
-      const e = obj as Phaser.Physics.Arcade.Sprite;
-      if (!e.active) return true;
-      const kind = e.getData("kind") as "walker" | "flyer";
-      if (kind === "walker") {
-        const dir = e.getData("dir") as number;
-        if (e.body!.blocked.left) {
-          e.setData("dir", 1);
-          e.setVelocityX(60);
-          e.setFlipX(true);
-        } else if (e.body!.blocked.right) {
-          e.setData("dir", -1);
-          e.setVelocityX(-60);
-          e.setFlipX(false);
-        } else {
-          e.setVelocityX(dir * 60);
-        }
-      } else {
-        // Flyer: bob, follow player loosely, shoot
-        const startY = e.getData("startY") as number;
-        e.y = startY + Math.sin(time / 400 + e.x * 0.01) * 30;
-        const dx = this.player.x - e.x;
-        e.setVelocityX(Phaser.Math.Clamp(dx, -80, 80));
-        e.setFlipX(dx < 0);
-        const cd = e.getData("shootCd") as number;
-        const next = (e.getData("nextShot") as number) || 0;
-        if (time > next && Math.abs(dx) < 600) {
-          e.setData("nextShot", time + cd);
-          this.fireEnemyBullet(e.x, e.y, this.player.x, this.player.y);
-        }
-      }
-      return true;
-    });
-
-    // Boss AI: activate when player gets close
-    if (this.boss) {
-      const reg = this.registry.get("game") as GameRegistry;
-      const dist = this.player.x - this.boss.x;
-      if (!reg.bossActive && Math.abs(dist) < 700) {
-        reg.bossActive = true;
-        this.registry.set("game", reg);
-        this.events.emit("hudUpdate");
-        this.bossNextAttack = time + 1500;
-        this.cameras.main.flash(200, 196, 75, 58);
-      }
-      if (reg.bossActive) {
-        this.boss.setFlipX(dist > 0);
-        // Slow chase
-        this.boss.setVelocityX(Phaser.Math.Clamp(dist, -50, 50));
-        if (time > this.bossNextAttack) {
-          this.bossNextAttack = time + 2200;
-          this.bossPhase = (this.bossPhase + 1) % 2;
-          if (this.bossPhase === 0) {
-            // Jump
-            if (this.boss.body!.blocked.down) this.boss.setVelocityY(-650);
-          } else {
-            // Wave of projectiles
-            for (let i = -2; i <= 2; i++) {
-              const ang = Math.atan2(this.player.y - this.boss.y, this.player.x - this.boss.x) +
-                i * 0.25;
-              const sp = 280;
-              this.fireEnemyBulletAngle(this.boss.x, this.boss.y - 20, Math.cos(ang) * sp, Math.sin(ang) * sp);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private fireEnemyBullet(fx: number, fy: number, tx: number, ty: number) {
-    const ang = Math.atan2(ty - fy, tx - fx);
-    const sp = 260;
-    this.fireEnemyBulletAngle(fx, fy, Math.cos(ang) * sp, Math.sin(ang) * sp);
-  }
-
-  private fireEnemyBulletAngle(x: number, y: number, vx: number, vy: number) {
-    const b = this.physics.add.sprite(x, y, "bullet");
-    b.setDisplaySize(28, 28);
-    b.setTint(0xffaa44);
-    b.body!.allowGravity = false;
-    b.setVelocity(vx, vy);
-    b.setRotation(Math.atan2(vy, vx));
-    this.enemyBullets.add(b);
-    this.time.delayedCall(2500, () => b.destroy());
+    this.registry.set("game", reg);
+    this.events.emit("hudUpdate");
   }
 }
