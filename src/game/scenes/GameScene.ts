@@ -523,10 +523,11 @@ export class GameScene extends Phaser.Scene {
       .setDepth(DEPTH_HUD - 5);
     const marker = this.add.container(0, 0, [glow, arrow]).setDepth(DEPTH_HUD - 5);
 
+    const fontPx = Math.floor(Math.min(w * 0.32, h * 0.45, 72));
     const letters = this.add
       .text(x, cy, "", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
-        fontSize: "60px",
+        fontSize: `${fontPx}px`,
         color: "#ffd400",
         stroke: "#000000",
         strokeThickness: 6,
@@ -536,7 +537,9 @@ export class GameScene extends Phaser.Scene {
       .setDepth(DEPTH_WALL + 2);
     letters.setShadow(0, 0, "#7ec8ff", 12, true, true);
 
-    const zone = this.add.zone(x, groundY - 40, w + 60, 120);
+    const zoneH = Math.max(160, h + 40);
+    const zoneCY = groundY - zoneH / 2 + 20;
+    const zone = this.add.zone(x, zoneCY, w + 80, zoneH);
     this.physics.add.existing(zone, true);
 
     this.walls.push({
@@ -830,6 +833,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private getNearbyWall(): WallData | undefined {
+    let best: WallData | undefined;
+    let bestDist = Infinity;
     for (const w of this.walls) {
       if (w.done) continue;
       const zb = w.zone.body as Phaser.Physics.Arcade.StaticBody;
@@ -839,10 +844,14 @@ export class GameScene extends Phaser.Scene {
         this.player.y > zb.y &&
         this.player.y < zb.y + zb.height
       ) {
-        return w;
+        const d = Math.abs(this.player.x - w.x);
+        if (d < bestDist) {
+          bestDist = d;
+          best = w;
+        }
       }
     }
-    return undefined;
+    return best;
   }
 
   private updateTagging(delta: number, reg: GameRegistry) {
@@ -890,8 +899,11 @@ export class GameScene extends Phaser.Scene {
 
       if (wall.progress >= 1 && !wall.done) {
         wall.done = true;
-        wall.sprite.setTexture("wall_tagged");
-        wall.letters.setText("");
+        // Keep original wall texture; lock the SNAF tag on top
+        wall.letters.setText("SNAF");
+        wall.letters.setColor("#ffd400");
+        wall.letters.setStroke("#1a0a00", 8);
+        wall.marker.setVisible(false);
         reg.tags++;
         reg.heat = Math.min(reg.maxHeat, reg.heat + 18);
         this.cameras.main.flash(120, 255, 212, 0);
