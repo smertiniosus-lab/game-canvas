@@ -1012,35 +1012,20 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // ============ Player walk tween mgmt ============
-  private startWalkTween() {
-    if (this.playerWalkTween && this.playerWalkTween.isPlaying()) return;
-    const baseY = this.player.scaleY;
-    this.playerWalkTween = this.tweens.add({
-      targets: this.player,
-      scaleY: { from: baseY, to: baseY * 0.96 },
-      duration: 220,
-      yoyo: true,
-      repeat: -1,
-      ease: "sine.inOut",
-    });
-  }
-
-  private stopWalkTween() {
-    if (this.playerWalkTween) {
-      this.playerWalkTween.stop();
-      this.playerWalkTween = undefined;
-    }
-  }
+  // ============ Player walk tween mgmt — DISABLED (caused scale conflicts) ============
+  private startWalkTween() { /* no-op */ }
+  private stopWalkTween() { /* no-op */ }
 
   private squashLand() {
+    // Brief landing tween — kill any prior to avoid stacking
+    this.tweens.killTweensOf(this.player);
     const sx = this.player.scaleX;
     const sy = this.player.scaleY;
     this.tweens.add({
       targets: this.player,
-      scaleY: { from: sy * 0.85, to: sy },
-      scaleX: { from: sx * 1.08, to: sx },
-      duration: 120,
+      scaleY: { from: sy * 0.88, to: sy },
+      scaleX: { from: sx * 1.06, to: sx },
+      duration: 110,
       ease: "back.out",
     });
   }
@@ -1126,15 +1111,15 @@ export class GameScene extends Phaser.Scene {
     if (jumpPressed && this.jumpsLeft > 0 && !this.crouching) {
       this.player.setVelocityY(-520);
       this.jumpsLeft--;
-      // Stretch on takeoff
+      // Brief stretch on takeoff (kill any prior tween to avoid scale stacking)
+      this.tweens.killTweensOf(this.player);
       const sx = this.player.scaleX;
       const sy = this.player.scaleY;
       this.tweens.add({
         targets: this.player,
-        scaleY: { from: sy, to: sy * 1.08 },
-        scaleX: { from: sx, to: sx * 0.92 },
-        duration: 120,
-        yoyo: true,
+        scaleY: { from: sy * 1.06, to: sy },
+        scaleX: { from: sx * 0.94, to: sx },
+        duration: 160,
         ease: "sine.out",
       });
     }
