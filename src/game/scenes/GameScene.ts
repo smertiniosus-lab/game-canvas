@@ -309,20 +309,33 @@ export class GameScene extends Phaser.Scene {
 
   // ============ Player body / scale ============
   private applyPlayerBody(crouching: boolean) {
-    // Kill any active scale/angle tweens before recomputing — prevents accumulating distortion
+    // Kill only scale/angle tweens before recomputing — preserves position tweens
     if (this.player) {
-      this.tweens.killTweensOf(this.player);
+      this.tweens.killTweensOf(this.player, ["scaleX", "scaleY", "angle"]);
     }
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const bw = PLAYER_BODY_W;
     const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
+
+    // Preserve foot position across body resize
+    const oldBottom = body.y + body.height;
     body.setSize(bw, bh, false);
     const tw = this.player.width;
     const th = this.player.height;
     body.setOffset((tw - bw) / 2, th - bh);
-    const visualH = crouching ? PLAYER_H * 0.7 : PLAYER_H;
-    this.player.setScale(PLAYER_W / tw, visualH / th);
-    this.player.setAngle(0);
+    const newBottom = body.y + body.height;
+    this.player.y += oldBottom - newBottom;
+
+    // Visual: keep full sprite height. Crouch only slightly compresses head (no floor sinking).
+    this.player.setScale(PLAYER_W / tw, PLAYER_H / th);
+    this.baseScaleX = this.player.scaleX;
+    this.baseScaleY = this.player.scaleY;
+    if (crouching) {
+      this.player.setScale(this.baseScaleX, this.baseScaleY * 0.9);
+      this.player.setAngle(this.facing > 0 ? 6 : -6);
+    } else {
+      this.player.setAngle(0);
+    }
   }
 
   // ============ Ground visuals — single tiled strip ============
