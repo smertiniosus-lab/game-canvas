@@ -889,6 +889,7 @@ export class GameScene extends Phaser.Scene {
           )
           .setDisplaySize(28, 28)
           .setAlpha(0.85)
+          .setTint(0xff3030)
           .setDepth(DEPTH_PLAYER + 1);
         this.tweens.add({
           targets: fx,
@@ -901,14 +902,39 @@ export class GameScene extends Phaser.Scene {
 
       if (wall.progress >= 1 && !wall.done) {
         wall.done = true;
-        // Keep original wall texture; lock the SNAF tag on top
+        // Keep original wall texture; lock the threatening red SNAF tag on top
         wall.letters.setText("SNAF");
-        wall.letters.setColor("#ffd400");
-        wall.letters.setStroke("#1a0a00", 8);
+        wall.letters.setColor("#e02828");
+        wall.letters.setStroke("#000000", 10);
         wall.marker.setVisible(false);
+
+        // Drips under each letter
+        const lb = wall.letters.getBounds();
+        const dripCount = Phaser.Math.Between(4, 7);
+        for (let i = 0; i < dripCount; i++) {
+          const dx = lb.x + Phaser.Math.Between(0, lb.width);
+          const dy = lb.y + lb.height - 4;
+          const dh = Phaser.Math.Between(12, 22);
+          this.add
+            .rectangle(dx, dy, 5, dh, 0xc01818, 0.85)
+            .setOrigin(0.5, 0)
+            .setDepth(DEPTH_WALL + 2);
+        }
+        // Splatter dots around the tag
+        const splatterCount = Phaser.Math.Between(6, 10);
+        for (let i = 0; i < splatterCount; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const radius = Phaser.Math.Between(10, 30);
+          const sx = wall.letters.x + Math.cos(angle) * radius;
+          const sy = wall.letters.y + Math.sin(angle) * radius;
+          this.add
+            .circle(sx, sy, Phaser.Math.Between(2, 4), 0xff2020, Phaser.Math.FloatBetween(0.6, 0.9))
+            .setDepth(DEPTH_WALL + 2);
+        }
+
         reg.tags++;
         reg.heat = Math.min(reg.maxHeat, reg.heat + 18);
-        this.cameras.main.flash(120, 255, 212, 0);
+        this.cameras.main.flash(120, 255, 60, 60);
         if (reg.tags >= reg.totalTags) {
           this.spawnEscapeMarker();
         }
