@@ -34,7 +34,8 @@ export class BootScene extends Phaser.Scene {
     this.load.image("cop_walker", "/game/cop_walker.png");
     this.load.image("cop_light", "/game/cop_light.png");
     this.load.image("wall_blank", "/game/wall_blank.png");
-    this.load.image("wall_tagged", "/game/wall_tagged.png");
+    // wall_tagged is no longer used — tagging is now drawn dynamically over the original wall texture
+
     this.load.image("wall_brick", "/game/wall_brick.png");
     this.load.image("wall_concrete", "/game/wall_concrete.png");
     this.load.image("wall_kiosk", "/game/wall_kiosk.png");
