@@ -523,10 +523,11 @@ export class GameScene extends Phaser.Scene {
       .setDepth(DEPTH_HUD - 5);
     const marker = this.add.container(0, 0, [glow, arrow]).setDepth(DEPTH_HUD - 5);
 
+    const fontPx = Math.floor(Math.min(w * 0.32, h * 0.45, 72));
     const letters = this.add
       .text(x, cy, "", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
-        fontSize: "60px",
+        fontSize: `${fontPx}px`,
         color: "#ffd400",
         stroke: "#000000",
         strokeThickness: 6,
@@ -536,7 +537,9 @@ export class GameScene extends Phaser.Scene {
       .setDepth(DEPTH_WALL + 2);
     letters.setShadow(0, 0, "#7ec8ff", 12, true, true);
 
-    const zone = this.add.zone(x, groundY - 40, w + 60, 120);
+    const zoneH = Math.max(160, h + 40);
+    const zoneCY = groundY - zoneH / 2 + 20;
+    const zone = this.add.zone(x, zoneCY, w + 80, zoneH);
     this.physics.add.existing(zone, true);
 
     this.walls.push({
