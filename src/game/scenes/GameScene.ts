@@ -528,14 +528,16 @@ export class GameScene extends Phaser.Scene {
       .text(x, cy, "", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
         fontSize: `${fontPx}px`,
-        color: "#ffd400",
+        color: "#e02828",
         stroke: "#000000",
-        strokeThickness: 6,
+        strokeThickness: 10,
+        fontStyle: "italic bold",
         align: "center",
       })
       .setOrigin(0.5)
+      .setAngle(-6)
       .setDepth(DEPTH_WALL + 2);
-    letters.setShadow(0, 0, "#7ec8ff", 12, true, true);
+    letters.setShadow(0, 0, "#ff2020", 16, true, true);
 
     const zoneH = Math.max(160, h + 40);
     const zoneCY = groundY - zoneH / 2 + 20;
