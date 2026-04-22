@@ -31,7 +31,15 @@ interface WallData {
   progress: number;
   done: boolean;
   letters: Phaser.GameObjects.Text;
+  kind: WallKind;
+  width: number;
+  height: number;
+  x: number;
+  cy: number;
+  marker?: Phaser.GameObjects.Container;
 }
+
+type WallKind = "garage" | "brick" | "concrete" | "kiosk" | "fence";
 
 interface Dumpster {
   x: number;
@@ -70,25 +78,29 @@ const COP_BODY_H = 84;
 // IMPORTANT: hero.png is drawn facing RIGHT but appears mirrored in source — adjust this if needed.
 // false = sprite faces right naturally (no flip when moving right).
 const HERO_FLIP_RIGHT = true; // setFlipX(true) when facing right
+const COP_WALKER_FLIP_RIGHT = true;
+const COP_LIGHT_FLIP_RIGHT = false;
 
 function buildLevel(): number[][] {
   const grid: number[][] = [];
   for (let y = 0; y < LEVEL_HEIGHT; y++) {
-    grid.push(new Array(LEVEL_WIDTH).fill(0));
+    grid.push(Array.from({ length: LEVEL_WIDTH }, () => 0));
   }
   // Solid ground
   for (let x = 0; x < LEVEL_WIDTH; x++) {
     grid[LEVEL_HEIGHT - 1][x] = 1;
     grid[LEVEL_HEIGHT - 2][x] = 1;
   }
-  // Long, connected ledges (balconies / canopies) — min length 4
+  // Long, connected ledges (balconies / canopies) — placed in GAPS BETWEEN wall groups
+  // Wall groups (px): G1≈400-640, G2≈1300-1780, G3≈2500-2740, G4≈3500-3980, G5≈4700
+  // Tiles 64px wide; place ledges between groups so pillars don't overlap walls.
+  // Tile X-ranges to AVOID (in tile units): G1: 5-11, G2: 19-29, G3: 38-44, G4: 53-63, G5: 72-76
   const ledges: Array<[number, number, number]> = [
-    [8, 9, 5],
-    [20, 8, 5],
-    [34, 9, 5],
-    [48, 8, 5],
-    [62, 9, 5],
-    [76, 8, 5],
+    [13, 8, 4],   // gap between G1 and G2
+    [32, 8, 4],   // gap between G2 and G3
+    [47, 7, 4],   // gap between G3 and G4
+    [66, 8, 4],   // gap between G4 and G5
+    [80, 7, 4],   // after G5
   ];
   for (const [x, y, len] of ledges) {
     for (let i = 0; i < len; i++) grid[y][x + i] = 2;
@@ -225,20 +237,20 @@ export class GameScene extends Phaser.Scene {
 
     // ============ Walls (garage doors), grouped as cooperatives ============
     // Groups of 2-3 doors with small gaps, then a longer gap before next group.
-    const wallGroups = [
-      [400, 580], // 2 doors
-      [1300, 1480, 1660], // 3 doors
-      [2500, 2680], // 2 doors
-      [3500, 3680, 3860], // 3 doors
-      [4700], // 1 door
+    // Groups: each group is one surface kind. Spacing within group: 240px, between groups: 600+px.
+    const wallGroups: Array<{ kind: WallKind; xs: number[] }> = [
+      { kind: "garage", xs: [400, 640] },               // 2 garages
+      { kind: "brick", xs: [1300, 1540, 1780] },        // 3 brick walls
+      { kind: "concrete", xs: [2500, 2740] },           // 2 concrete slabs
+      { kind: "kiosk", xs: [3500, 3740, 3980] },        // 3 kiosks
+      { kind: "fence", xs: [4700] },                    // 1 fence
     ];
     let pickedCount = 0;
     const targetTags = 5;
-    // Spawn ALL doors visually but only mark some as "taggable" — actually mark first 5 across groups
     for (const group of wallGroups) {
-      for (const wx of group) {
+      for (const wx of group.xs) {
         const taggable = pickedCount < targetTags;
-        this.spawnWall(wx, (LEVEL_HEIGHT - 2) * TILE, taggable);
+        this.spawnWall(group.kind, wx, (LEVEL_HEIGHT - 2) * TILE, taggable);
         if (taggable) pickedCount++;
       }
     }
@@ -294,6 +306,10 @@ export class GameScene extends Phaser.Scene {
 
   // ============ Player body / scale ============
   private applyPlayerBody(crouching: boolean) {
+    // Kill any active scale/angle tweens before recomputing — prevents accumulating distortion
+    if (this.player) {
+      this.tweens.killTweensOf(this.player);
+    }
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const bw = PLAYER_BODY_W;
     const bh = crouching ? PLAYER_BODY_H_CROUCH : PLAYER_BODY_H;
@@ -303,6 +319,7 @@ export class GameScene extends Phaser.Scene {
     body.setOffset((tw - bw) / 2, th - bh);
     const visualH = crouching ? PLAYER_H * 0.7 : PLAYER_H;
     this.player.setScale(PLAYER_W / tw, visualH / th);
+    this.player.setAngle(0);
   }
 
   // ============ Ground visuals — single tiled strip ============
@@ -350,16 +367,18 @@ export class GameScene extends Phaser.Scene {
       const px = run.x * TILE;
       const py = run.y * TILE;
       const w = run.len * TILE;
-      // Support pillar to ground
-      const pillarH = groundTopY - (py + TILE);
+      // Narrow support pillar — only 180px tall, ends ABOVE wall height (~190px)
+      // so it never overlaps walls visually.
+      const pillarH = Math.min(180, groundTopY - (py + TILE));
       if (pillarH > 0) {
+        const pillarW = w * 0.3;
         this.add
-          .rectangle(px + w / 2, py + TILE + pillarH / 2, w * 0.85, pillarH, 0x2b2f3a, 0.85)
+          .rectangle(px + w / 2, py + TILE + pillarH / 2, pillarW, pillarH, 0x2b2f3a, 0.85)
           .setDepth(DEPTH_GROUND);
         // Window strip on pillar (warm light)
         for (let i = 0; i < Math.floor(pillarH / 50); i++) {
           this.add
-            .rectangle(px + w / 2, py + TILE + 30 + i * 50, w * 0.4, 14, 0xffd070, 0.55)
+            .rectangle(px + w / 2, py + TILE + 30 + i * 50, pillarW * 0.6, 14, 0xffd070, 0.55)
             .setDepth(DEPTH_GROUND);
         }
       }
@@ -428,34 +447,59 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.flash(300, 126, 200, 255);
   }
 
-  // ============ Garage door (wall) ============
-  private spawnWall(x: number, groundY: number, taggable: boolean) {
-    const w = 160;
-    const h = 180;
+  // ============ Wall (garage / brick / concrete / kiosk / fence) ============
+  private spawnWall(kind: WallKind, x: number, groundY: number, taggable: boolean) {
+    // Per-kind dimensions
+    const dims: Record<WallKind, { w: number; h: number; texKey: string }> = {
+      garage:   { w: 160, h: 180, texKey: "wall_blank" },
+      brick:    { w: 180, h: 200, texKey: "wall_brick" },
+      concrete: { w: 200, h: 180, texKey: "wall_concrete" },
+      kiosk:    { w: 150, h: 220, texKey: "wall_kiosk" },
+      fence:    { w: 220, h: 140, texKey: "wall_fence" },
+    };
+    const { w, h, texKey } = dims[kind];
     const cy = groundY - h / 2;
     const sprite = this.add
-      .image(x, cy, "wall_blank")
+      .image(x, cy, texKey)
       .setDisplaySize(w, h)
       .setDepth(DEPTH_WALL);
 
+    // Garage number tag (sticker on the side) — only for garages, randomized
+    if (kind === "garage") {
+      const numbers = ["13", "27", "42", "8", "66", "104", "9", "31"];
+      const num = numbers[Math.floor(Math.random() * numbers.length)];
+      this.add
+        .text(x - w / 2 + 14, cy - h / 2 + 12, num, {
+          fontFamily: "'Impact', 'Arial Black', sans-serif",
+          fontSize: "20px",
+          color: "#ffd070",
+          stroke: "#1a1410",
+          strokeThickness: 3,
+        })
+        .setOrigin(0, 0)
+        .setDepth(DEPTH_WALL + 1);
+    }
+
     if (!taggable) {
-      // Pre-tagged or just decorative: skip zone, no indicator
       sprite.setTint(0xb8b8c0);
       return;
     }
 
-    const frame = this.add.graphics();
-    frame.lineStyle(3, 0x7ec8ff, 0.85);
-    frame.strokeRoundedRect(x - w / 2 - 4, cy - h / 2 - 4, w + 8, h + 8, 6);
-    frame.setDepth(DEPTH_WALL + 1);
-
-    this.tweens.add({
-      targets: frame,
-      alpha: { from: 0.85, to: 0.3 },
-      duration: 900,
-      yoyo: true,
-      repeat: -1,
-    });
+    // Minimalist marker: small yellow arrow above + soft amber glow under (no flashing frame)
+    const glow = this.add
+      .ellipse(x, groundY - 6, w * 0.9, 22, 0xffa630, 0.28)
+      .setDepth(DEPTH_WALL - 1);
+    const arrow = this.add
+      .text(x, cy - h / 2 - 22, "▼", {
+        fontFamily: "'Arial', sans-serif",
+        fontSize: "26px",
+        color: "#ffd400",
+        stroke: "#000000",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(DEPTH_HUD - 5);
+    const marker = this.add.container(0, 0, [glow, arrow]).setDepth(DEPTH_HUD - 5);
 
     const letters = this.add
       .text(x, cy, "", {
@@ -479,6 +523,12 @@ export class GameScene extends Phaser.Scene {
       progress: 0,
       done: false,
       letters,
+      kind,
+      width: w,
+      height: h,
+      x,
+      cy,
+      marker,
     });
   }
 
@@ -565,14 +615,17 @@ export class GameScene extends Phaser.Scene {
     }
 
     const center = (patrolMin + patrolMax) / 2;
-    const startDir: 1 | -1 = x < center ? 1 : -1;
+    let startDir: 1 | -1 = x < center ? 1 : -1;
 
     if (kind === "walker") {
       sprite.setVelocityX(startDir * 60);
+    } else {
+      // Light cop is stationary — face toward the inside of the level (away from nearest edge)
+      startDir = x < this.worldWidthPx / 2 ? 1 : -1;
     }
 
-    // Cops face same way as hero relative to flip
-    sprite.setFlipX(this.copFlipFor(startDir));
+    // Cops face same way as hero relative to flip (per-kind constants)
+    sprite.setFlipX(this.copFlipFor(startDir, kind));
 
     // Idle/walk bobbing tween (always running, subtle)
     const walkTween = this.tweens.add({
@@ -605,9 +658,9 @@ export class GameScene extends Phaser.Scene {
     return dir === 1 ? HERO_FLIP_RIGHT : !HERO_FLIP_RIGHT;
   }
 
-  private copFlipFor(dir: 1 | -1): boolean {
-    // Cops use same convention as hero
-    return dir === 1 ? HERO_FLIP_RIGHT : !HERO_FLIP_RIGHT;
+  private copFlipFor(dir: 1 | -1, kind: "walker" | "light" = "walker"): boolean {
+    const baseRight = kind === "walker" ? COP_WALKER_FLIP_RIGHT : COP_LIGHT_FLIP_RIGHT;
+    return dir === 1 ? baseRight : !baseRight;
   }
 
   private spawnEscapeMarker() {
@@ -856,7 +909,7 @@ export class GameScene extends Phaser.Scene {
         else if (s.x >= cop.patrolMax) cop.dir = -1;
         cop.facing = cop.dir;
         s.setVelocityX(cop.dir * 60);
-        s.setFlipX(this.copFlipFor(cop.dir));
+        s.setFlipX(this.copFlipFor(cop.dir, cop.kind));
         // ensure walk tween playing
         if (cop.walkTween && !cop.walkTween.isPlaying()) cop.walkTween.resume();
       }
@@ -920,7 +973,7 @@ export class GameScene extends Phaser.Scene {
           const dir = (dx > 0 ? 1 : -1) as 1 | -1;
           cop.facing = dir;
           s.setVelocityX(dir * 90);
-          s.setFlipX(this.copFlipFor(dir));
+          s.setFlipX(this.copFlipFor(dir, cop.kind));
         }
 
         if (spotted) {
@@ -943,10 +996,10 @@ export class GameScene extends Phaser.Scene {
           const dir = (dx > 0 ? 1 : -1) as 1 | -1;
           cop.facing = dir;
           s.setVelocityX(dir * speed);
-          s.setFlipX(this.copFlipFor(dir));
+          s.setFlipX(this.copFlipFor(dir, cop.kind));
         } else {
           cop.facing = (dx > 0 ? 1 : -1) as 1 | -1;
-          s.setFlipX(this.copFlipFor(cop.facing));
+          s.setFlipX(this.copFlipFor(cop.facing, cop.kind));
         }
 
         if ((playerHidden && dist > 200) || dist > chaseRange + 200) {
@@ -959,35 +1012,20 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // ============ Player walk tween mgmt ============
-  private startWalkTween() {
-    if (this.playerWalkTween && this.playerWalkTween.isPlaying()) return;
-    const baseY = this.player.scaleY;
-    this.playerWalkTween = this.tweens.add({
-      targets: this.player,
-      scaleY: { from: baseY, to: baseY * 0.96 },
-      duration: 220,
-      yoyo: true,
-      repeat: -1,
-      ease: "sine.inOut",
-    });
-  }
-
-  private stopWalkTween() {
-    if (this.playerWalkTween) {
-      this.playerWalkTween.stop();
-      this.playerWalkTween = undefined;
-    }
-  }
+  // ============ Player walk tween mgmt — DISABLED (caused scale conflicts) ============
+  private startWalkTween() { /* no-op */ }
+  private stopWalkTween() { /* no-op */ }
 
   private squashLand() {
+    // Brief landing tween — kill any prior to avoid stacking
+    this.tweens.killTweensOf(this.player);
     const sx = this.player.scaleX;
     const sy = this.player.scaleY;
     this.tweens.add({
       targets: this.player,
-      scaleY: { from: sy * 0.85, to: sy },
-      scaleX: { from: sx * 1.08, to: sx },
-      duration: 120,
+      scaleY: { from: sy * 0.88, to: sy },
+      scaleX: { from: sx * 1.06, to: sx },
+      duration: 110,
       ease: "back.out",
     });
   }
@@ -1073,15 +1111,15 @@ export class GameScene extends Phaser.Scene {
     if (jumpPressed && this.jumpsLeft > 0 && !this.crouching) {
       this.player.setVelocityY(-520);
       this.jumpsLeft--;
-      // Stretch on takeoff
+      // Brief stretch on takeoff (kill any prior tween to avoid scale stacking)
+      this.tweens.killTweensOf(this.player);
       const sx = this.player.scaleX;
       const sy = this.player.scaleY;
       this.tweens.add({
         targets: this.player,
-        scaleY: { from: sy, to: sy * 1.08 },
-        scaleX: { from: sx, to: sx * 0.92 },
-        duration: 120,
-        yoyo: true,
+        scaleY: { from: sy * 1.06, to: sy },
+        scaleX: { from: sx * 0.94, to: sx },
+        duration: 160,
         ease: "sine.out",
       });
     }
