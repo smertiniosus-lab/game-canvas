@@ -47,6 +47,21 @@ export class GameOverScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    if (this.victory) {
+      const tag = this.add
+        .text(w / 2, h / 2 - 12, "SNAF", {
+          fontFamily: "'Impact', 'Arial Black', sans-serif",
+          fontSize: "30px",
+          color: "#e02828",
+          stroke: "#000000",
+          strokeThickness: 6,
+          fontStyle: "italic bold",
+        })
+        .setOrigin(0.5)
+        .setAngle(-6);
+      tag.setShadow(0, 0, "#ff2020", 12, true, true);
+    }
+
     let bonus = 0;
     if (this.victory && !this.spotted) bonus += 1000;
     const score = this.tags * 500 + bonus;

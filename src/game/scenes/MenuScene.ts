@@ -56,6 +56,20 @@ export class MenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    // Mini SNAF tag preview in the threatening red style
+    const miniTag = this.add
+      .text(width / 2, panelY + 268, "SNAF", {
+        fontFamily: "'Impact', 'Arial Black', sans-serif",
+        fontSize: "36px",
+        color: "#e02828",
+        stroke: "#000000",
+        strokeThickness: 6,
+        fontStyle: "italic bold",
+      })
+      .setOrigin(0.5)
+      .setAngle(-6);
+    miniTag.setShadow(0, 0, "#ff2020", 12, true, true);
+
     const playBtn = this.add
       .text(width / 2, height - 240, "▶  ВЫЙТИ НА УЛИЦУ", {
         fontFamily: "'Impact', 'Arial Black', sans-serif",
